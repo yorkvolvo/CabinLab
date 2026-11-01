@@ -142,7 +142,7 @@ python scripts/e2e.py
 
 可用 `CABINLAB_URL=http://127.0.0.1:5174` 指定测试地址。脚本创建独立浏览器上下文，不修改日常浏览器数据。检查桌面和 390px 移动布局、重复生成、确认门禁、暂停 / 单步 / 停止、重放、超时恢复、手动接管、版本回退、生成取消 / 失败、持久化。截图与 JSON 证据输出到被 Git 忽略的 `artifacts/`。
 
-GitHub Actions 已配置相同检查，并在生产构建上运行浏览器验收。工作流需推送到确认的远程后才会实际运行。
+GitHub Actions 在 Ubuntu 24.04 上运行相同检查，并在生产构建上运行浏览器验收。代码已同步到私有仓库 [yorkvolvo/CabinLab](https://github.com/yorkvolvo/CabinLab)，每次推送的实际结果和浏览器证据见 [Actions](https://github.com/yorkvolvo/CabinLab/actions)。
 
 ## 目录
 

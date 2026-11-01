@@ -44,4 +44,4 @@
 
 真实模型连接只验证了请求契约和受控模拟响应，未使用真实服务端密钥实测。Safari / Firefox、真实车辆、跨运行时版本重放未验证。
 
-GitHub Actions 工作流已准备，但截至本记录，未配置 Git 远程，尚未推送，因此远程 CI **未运行**。目标仓库 owner/repo 与可见性待确认；没有擅自创建远程仓库、发布网站或提交比赛材料。
+代码及 `v0.1.0` 标签已同步到私有仓库 [yorkvolvo/CabinLab](https://github.com/yorkvolvo/CabinLab)。首轮 CI 的类型检查、lint、89 项测试及构建通过；浏览器安装因 `ubuntu-latest` 已切换至 Ubuntu 26.04、锁定的 Playwright 版本不支持该系统而失败。工作流现固定 Ubuntu 24.04，后续提交的实际状态及浏览器证据见 [GitHub Actions](https://github.com/yorkvolvo/CabinLab/actions)。尚未部署网站或提交比赛材料。

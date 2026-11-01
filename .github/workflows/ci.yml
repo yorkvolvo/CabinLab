@@ -9,7 +9,8 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # 固定在当前 Playwright 版本支持的系统，避免 runner 默认镜像升级破坏验收。
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
