@@ -1,0 +1,259 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { get as httpGet } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { createApp } from '../server/app';
+import { compile, configFromEnv, type ProviderConfig } from '../server/provider';
+import { cloneTemplate } from '../src/domain/templates';
+
+const request = { prompt: '停车休息，太热就开空调', templateId: 'rest' };
+const modelConfig: ProviderConfig = {
+  provider: 'openai-compatible',
+  baseUrl: 'https://model.example.test/v1',
+  model: 'test-model',
+  apiKey: 'test-only-not-a-real-key',
+};
+
+test('默认使用 demo，即使存在 key 也不自动调用模型', async () => {
+  assert.deepEqual(configFromEnv({ LLM_API_KEY: 'unused' }), { provider: 'demo' });
+  let fetched = false;
+  const result = await compile(request, { provider: 'demo' }, async () => {
+    fetched = true;
+    throw new Error('不应调用');
+  });
+  assert.equal(fetched, false);
+  assert.equal(result.mode, 'demo');
+});
+test('模型配置缺失和不安全的远程 HTTP 会被拒绝', () => {
+  assert.throws(() => configFromEnv({ LLM_PROVIDER: 'unknown' }));
+  assert.throws(() => configFromEnv({ LLM_PROVIDER: 'openai-compatible' }));
+  assert.throws(() =>
+    configFromEnv({
+      LLM_PROVIDER: 'openai-compatible',
+      LLM_BASE_URL: 'http://example.test/v1',
+      LLM_MODEL: 'model',
+      LLM_API_KEY: 'test',
+    }),
+  );
+  assert.doesNotThrow(() =>
+    configFromEnv({
+      LLM_PROVIDER: 'openai-compatible',
+      LLM_BASE_URL: 'http://127.0.0.1:8080/v1',
+      LLM_MODEL: 'local',
+      LLM_API_KEY: 'local',
+    }),
+  );
+});
+test('兼容接口通过服务端鉴权；返回场景必须再确认', async () => {
+  const fakeFetch: typeof fetch = async (url, init) => {
+    assert.equal(url, 'https://model.example.test/v1/chat/completions');
+    assert.equal(
+      (init?.headers as Record<string, string>).Authorization,
+      'Bearer test-only-not-a-real-key',
+    );
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.model, 'test-model');
+    assert.equal(body.messages[1].content, request.prompt);
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(cloneTemplate('rest')) } }],
+      }),
+    );
+  };
+  const result = await compile(request, modelConfig, fakeFetch);
+  assert.equal(result.mode, 'model');
+  assert.equal(result.draft.confirmed, false);
+  assert.ok(!JSON.stringify(result).includes(modelConfig.apiKey!));
+});
+test('上游错误、JSON 结构异常和无效能力均会失败', async () => {
+  const responses = [
+    new Response('error', { status: 429 }),
+    new Response('not json'),
+    new Response(JSON.stringify({ choices: [] })),
+    new Response(JSON.stringify({ choices: [{ message: { content: '{}' } }] })),
+  ];
+  for (const response of responses)
+    await assert.rejects(compile(request, modelConfig, async () => response));
+});
+test('API 参数长度与额外字段被拒绝', async () => {
+  for (const invalid of [
+    { ...request, prompt: 'x' },
+    { ...request, prompt: 'x'.repeat(2001) },
+    { ...request, templateId: 'drive' },
+    { ...request, baseUrl: 'https://evil.example' },
+  ])
+    await assert.rejects(compile(invalid, { provider: 'demo' }));
+});
+test('HTTP 接口健康检查、编译、同源校验及体积限制', async (t) => {
+  const server = createApp({ provider: 'demo' }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const health = await fetch(`${base}/api/health`);
+  assert.equal(health.status, 200);
+  assert.equal((await health.json()).mode, 'demo');
+  const valid = await fetch(`${base}/api/compile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: base },
+    body: JSON.stringify(request),
+  });
+  assert.equal(valid.status, 200);
+  assert.equal((await valid.json()).draft.confirmed, false);
+  const cross = await fetch(`${base}/api/compile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://other.example' },
+    body: JSON.stringify(request),
+  });
+  assert.equal(cross.status, 403);
+  const wrongType = await fetch(`${base}/api/compile`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+  assert.equal(wrongType.status, 415);
+  const malformed = await fetch(`${base}/api/compile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{',
+  });
+  assert.equal(malformed.status, 400);
+  const large = await fetch(`${base}/api/compile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...request, prompt: 'a'.repeat(15000) }),
+  });
+  assert.equal(large.status, 413);
+  const missing = await fetch(`${base}/api/nope`);
+  assert.equal(missing.status, 404);
+});
+test('模型服务失败只返回受控错误，不泄漏上游密钥内容', async (t) => {
+  const server = createApp(modelConfig, async () => {
+    throw new Error('test-only-not-a-real-key');
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const response = await fetch(
+    `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/compile`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    },
+  );
+  assert.equal(response.status, 502);
+  assert.ok(!(await response.text()).includes(modelConfig.apiKey!));
+});
+
+test('超过 100 KB 的模型响应流被中止', async () => {
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(100001));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await assert.rejects(
+    compile(request, modelConfig, async () => new Response(stream)),
+    /大小限制/,
+  );
+  assert.equal(cancelled, true);
+});
+
+test('API 拒绝伪造的非本地主机名', async (t) => {
+  const server = createApp({ provider: 'demo' }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  // Fetch 会重写 Host；用 HTTP 客户端发送真实的伪造 Host。
+  const status = await new Promise<number | undefined>((resolve, reject) => {
+    httpGet(
+      `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/health`,
+      { headers: { Host: 'attacker.example' } },
+      (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      },
+    ).on('error', reject);
+  });
+  assert.equal(status, 403);
+});
+
+test('同时两个编译请求占用时第三个被拒绝，完成后可重试', { timeout: 5000 }, async (t) => {
+  const resolvers: Array<(response: Response) => void> = [];
+  let allStarted: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    allStarted = resolve;
+  });
+  const fakeFetch: typeof fetch = () =>
+    new Promise<Response>((resolve) => {
+      resolvers.push(resolve);
+      if (resolvers.length === 2) allStarted();
+    });
+  const server = createApp(modelConfig, fakeFetch).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/compile`;
+  const send = () =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+  const first = send();
+  const second = send();
+  await started;
+  assert.equal((await send()).status, 429);
+  const response = () =>
+    new Response(
+      JSON.stringify({
+        choices: [{ message: { content: JSON.stringify(cloneTemplate('rest')) } }],
+      }),
+    );
+  resolvers.forEach((resolve) => resolve(response()));
+  assert.equal((await first).status, 200);
+  assert.equal((await second).status, 200);
+  const retry = send();
+  while (resolvers.length < 3) await new Promise((resolve) => setTimeout(resolve, 1));
+  resolvers[2](response());
+  assert.equal((await retry).status, 200);
+});
+
+test('浏览器取消请求会传递到上游模型调用', { timeout: 5000 }, async (t) => {
+  let markStarted: () => void = () => {};
+  let markAborted: () => void = () => {};
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const aborted = new Promise<void>((resolve) => {
+    markAborted = resolve;
+  });
+  const fakeFetch: typeof fetch = async (_url, init) => {
+    markStarted();
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        'abort',
+        () => {
+          markAborted();
+          reject(new Error('cancelled'));
+        },
+        { once: true },
+      );
+    });
+  };
+  const server = createApp(modelConfig, fakeFetch).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const controller = new AbortController();
+  const pending = fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/compile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+    signal: controller.signal,
+  });
+  const rejected = assert.rejects(pending);
+  await started;
+  controller.abort();
+  await rejected;
+  await aborted;
+});

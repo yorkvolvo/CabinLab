@@ -1,0 +1,76 @@
+import express from 'express';
+import { compile, compileRequestSchema, type ProviderConfig } from './provider';
+
+export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch) {
+  const app = express();
+  app.disable('x-powered-by');
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (!['localhost', '127.0.0.1', '[::1]'].includes(req.hostname)) {
+      res.status(403).json({ error: '本地原型仅接受 localhost 或 loopback 地址' });
+      return;
+    }
+    if (req.method === 'POST') {
+      const origin = req.headers.origin;
+      if (origin && origin !== `${req.protocol}://${req.headers.host}`) {
+        res.status(403).json({ error: '仅允许同源请求' });
+        return;
+      }
+      if (!req.is('application/json')) {
+        res.status(415).json({ error: '需要 application/json' });
+        return;
+      }
+    }
+    next();
+  });
+  app.use(express.json({ limit: '12kb' }));
+  app.get('/api/health', (_req, res) =>
+    res.json({
+      status: 'ok',
+      mode: config.provider === 'demo' ? 'demo' : 'model',
+      version: '0.1.0',
+    }),
+  );
+  let inFlight = 0;
+  app.post('/api/compile', async (req, res) => {
+    const parsed = compileRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: '请输入 4–2000 字的需求，并选择受支持的场景模板。' });
+      return;
+    }
+    if (inFlight >= 2) {
+      res.status(429).json({ error: '编译器正在处理请求，请稍后再试。' });
+      return;
+    }
+    inFlight++;
+    const controller = new AbortController();
+    const onClose = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.on('close', onClose);
+    try {
+      res.json(await compile(parsed.data, config, fetcher, controller.signal));
+    } catch {
+      if (!res.destroyed)
+        res.status(502).json({
+          error: '场景编译失败：请检查模型配置、连接或响应格式。未执行任何动作，可修改后重试。',
+        });
+    } finally {
+      inFlight--;
+      res.off('close', onClose);
+    }
+  });
+  app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
+  app.use(
+    (
+      error: { status?: number },
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      res.status(error.status === 413 ? 413 : 400).json({ error: '请求体过大或不是合法 JSON' });
+    },
+  );
+  return app;
+}
