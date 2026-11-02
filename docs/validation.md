@@ -1,14 +1,14 @@
-# 初版验收记录
+# v0.2 验收记录
 
-验收日期：2026-11-01。环境：macOS、Node.js 22.22.2、Python 3.12、Python Playwright 1.58.0 / Chromium。使用本地生产构建、演示模式，没有真实模型调用。
+验收日期：2026-11-02。环境：macOS、Node.js 22.22.2、Python 3.12.10、Python Playwright 1.58.0 / Chromium。使用本地生产构建、演示模式；模型测试使用受控 mock，没有真实模型调用。
 
 | 检查                | 实际结果                                          |
 | ------------------- | ------------------------------------------------- |
 | TypeScript 类型检查 | 通过                                              |
 | ESLint              | 通过，0 warning                                   |
-| Node.js 自动测试    | **89 / 89 通过**，0 跳过                          |
-| 生产构建            | 通过；主脚本 gzip 约 106 KB                       |
-| 浏览器验收          | **16 / 16 组通过**                                |
+| Node.js 自动测试    | **135 / 135 通过**，0 跳过                        |
+| 生产构建            | 通过；主脚本 gzip 约 111 KB                       |
+| 浏览器验收          | **23 / 23 组通过**                                |
 | 桌面 / 移动布局     | 1536×1150、390×844，无横向溢出                    |
 | 浏览器运行错误      | 没有未捕获 JavaScript 异常                        |
 | npm audit           | **0 项已知漏洞**（依验收时公告数据库）            |
@@ -26,22 +26,35 @@
 - 重放：原始轨迹和重放轨迹的事件及设备终态相等，包括手动操作与停止。
 - 生成重复点击只有一个请求；取消后晚到响应不会覆盖场景；失败不会伪造候选场景。
 - 真实 HTTP 接口测试覆盖同源、Host 校验、请求体限制、并发限制、取消传递、上游错误与响应大小限制。
+- 修改上下文：请求携带当前已确认场景；多参数草案先展示差异，放弃后基准不变。混合未支持动作、模糊数值、重复参数和越界值整次拒绝。
+- 版本对照：同一断言集发现 **8 项新增失败**；反向比较显示 **8 项恢复通过**。两版结果及证据可一起导出。
+- 跨会话导入：新浏览器上下文独立重放先前文件，事件与终态一致，当前版本和暂停中的运行保持原样。部分完成与停止记录明确保留原结果。
+- 导入边界：篡改终态、事件、状态、时间、命令、进度或锁会被发现；未知能力、倒序记录、旧运行时、损坏 JSON、超限大小或数量被拒绝。失败后可重新导入。
+- 长等待重放：630 秒后才满足条件的记录可按分段时钟重放至第 644 秒的终态。
+- mock provider：鉴权失败、限流、错误响应、模型澄清、修改基准、响应头前后超时、流读取取消、最长中文请求均有合约测试。一次请求不会自动重试。
+- 浏览器竞态：编辑输入或切换场景取消旧请求，晚到结果不会覆盖当前内容；同一批双击单步连续推进两秒，不重建运行。
 
-![零秒变更的回归结果](images/regression.png)
+![版本差异与回归](images/comparison.png)
+
+![跨会话证据复核](images/evidence.png)
 
 ## 本地证据文件
 
 运行 `python scripts/e2e.py` 会重新生成以下文件；它们保留在本机 `artifacts/`，没有提交到 Git：
 
-- `browser-verification.json`：16 项浏览器检查清单。
+- `browser-verification.json`：23 项浏览器检查清单。
 - `run-success.json`、`run-replay.json`：正常执行与重放对照。
 - `run-timeout.json`、`run-manual.json`、`run-motion.json`：超时、接管、挡位变化证据。
 - `run-cancelled.json`、`run-cancelled-replay.json`：停止与重放对照。
 - `verification-regression.json`：零秒变更的逐用例报告。
+- `version-comparison.json`、`version-comparison.png`：两版对照报告及截图。
+- `experiment.json`、`import-replayed.json`：完整实验导入与独立复现证据。
+- `run-tampered.json`、`run-legacy.json`：只用于拒绝路径验收的负向样本，不是有效证据。
+- `evidence-inspector.png`、`evidence-mobile.png`：桌面及移动端证据复核截图。
 - `workbench-initial.png`、`workbench-completed.png`、`workbench-mobile.png`：浏览器截图。
 
 ## 尚未运行或交付
 
-真实模型连接只验证了请求契约和受控模拟响应，未使用真实服务端密钥实测。Safari / Firefox、真实车辆、跨运行时版本重放未验证。
+真实模型连接只验证了请求契约和受控模拟响应，未使用真实服务端密钥实测。Safari / Firefox、真实车辆、跨运行时版本重放未验证。一致性核验不证明文件来源，也无法识别同时修改输入与结果而仍保持一致的记录。
 
-代码及 `v0.1.0` 标签已同步到私有仓库 [yorkvolvo/CabinLab](https://github.com/yorkvolvo/CabinLab)。首轮 CI 的类型检查、lint、89 项测试及构建通过；浏览器安装因 `ubuntu-latest` 已切换至 Ubuntu 26.04、锁定的 Playwright 版本不支持该系统而失败。工作流现固定 Ubuntu 24.04，后续提交的实际状态及浏览器证据见 [GitHub Actions](https://github.com/yorkvolvo/CabinLab/actions)。尚未部署网站或提交比赛材料。
+私有仓库为 [yorkvolvo/CabinLab](https://github.com/yorkvolvo/CabinLab)。GitHub Actions 在 Ubuntu 24.04 上运行格式、类型、lint、全部自动测试、生产构建及同一浏览器脚本；各提交的实际状态与浏览器证据见 [GitHub Actions](https://github.com/yorkvolvo/CabinLab/actions)。本轮软件版本为 0.2.0，既有 `v0.1.0` Git 标签保持不变。尚未部署网站或提交比赛材料。

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import packageInfo from '../package.json';
 import {
   ArrowDown,
   ArrowRight,
@@ -27,6 +28,7 @@ import {
   Square,
   Terminal,
   Thermometer,
+  Upload,
   WandSparkles,
   X,
 } from 'lucide-react';
@@ -44,6 +46,7 @@ import {
   initialVehicle,
   isTerminal,
   replayEvidence,
+  runStatusLabels as statusLabels,
   type Fault,
   type RunSnapshot,
   type Vehicle,
@@ -51,17 +54,11 @@ import {
 import { verifyScenario, type VerificationReport } from './domain/verification';
 import Cabin from './components/Cabin';
 import Verification from './components/Verification';
+import VersionComparison, { ScenarioDiff } from './components/VersionComparison';
+import EvidenceInspector from './components/EvidenceInspector';
 import { downloadJson, readVersions, storageKey } from './storage';
 
 const icons = { rest: Moon, reading: BookOpen, refresh: Leaf };
-const statusLabels = {
-  armed: '等待触发',
-  executing: '正在执行',
-  completed: '执行完成',
-  partial: '部分完成',
-  stopped: '条件退出',
-  cancelled: '已停止',
-};
 const eventLabels = {
   armed: '就绪',
   condition: '计时',
@@ -84,11 +81,15 @@ export default function App() {
     () => versions.filter((s) => s.templateId === 'rest').at(-1) ?? cloneTemplate('rest'),
   );
   const [draft, setDraft] = useState<Scenario | null>(null);
-  const [prompt, setPrompt] = useState(selected.sourcePrompt);
+  const [prompt, setPrompt] = useState(templates[selected.templateId].sourcePrompt);
   const [compileMessage, setCompileMessage] = useState('');
+  const [compileIntent, setCompileIntent] = useState<'create' | 'modify'>('create');
+  const [compileError, setCompileError] = useState(false);
   const [compiling, setCompiling] = useState(false);
   const [providerMode, setProviderMode] = useState<'demo' | 'model' | 'offline'>('offline');
-  const [tab, setTab] = useState<'workbench' | 'verification' | 'catalog'>('workbench');
+  const [tab, setTab] = useState<'workbench' | 'verification' | 'catalog' | 'evidence'>(
+    'workbench',
+  );
   const [vehicle, setVehicle] = useState<Vehicle>({ ...initialVehicle });
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -105,6 +106,7 @@ export default function App() {
   const currentVersions = versions.filter((s) => s.templateId === selected.templateId);
   const currentSignal = signalLabels[scenario.trigger.signal];
   const active = snapshot && !isTerminal(snapshot.status);
+  const draftErrors = draft ? validateScenario(draft).errors : [];
 
   useEffect(() => {
     if (timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight;
@@ -197,13 +199,15 @@ export default function App() {
     haltAndReset();
     setSelected(next);
     setDraft(null);
-    setPrompt(next.sourcePrompt);
+    setPrompt(templates[next.templateId].sourcePrompt);
     setCompileMessage('');
+    setCompileError(false);
+    setCompileIntent('create');
     setFault('none');
     setTab('workbench');
   }
   function editScenario(patch: Partial<Scenario>) {
-    if (compiling) cancelCompile();
+    if (compileAbort.current) cancelCompile();
     if (active) {
       runtime.current?.cancel();
       setPlaying(false);
@@ -213,17 +217,24 @@ export default function App() {
     setReport(null);
   }
   async function generate() {
-    if (compiling || compileAbort.current || prompt.trim().length < 4) return;
+    if (compiling || compileAbort.current || draft || prompt.trim().length < 4) return;
     const id = ++requestId.current;
     const controller = new AbortController();
     compileAbort.current = controller;
     setCompiling(true);
     setCompileMessage('');
+    setCompileError(false);
+    setPlaying(false);
     try {
       const response = await fetch('/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, templateId: selected.templateId }),
+        body: JSON.stringify({
+          prompt,
+          templateId: selected.templateId,
+          intent: compileIntent,
+          ...(compileIntent === 'modify' ? { baseScenario: selected } : {}),
+        }),
         signal: controller.signal,
       });
       const data = (await response.json()) as CompileResult & { error?: string };
@@ -236,8 +247,10 @@ export default function App() {
       setCompileMessage(data.message);
       setProviderMode(data.mode);
     } catch (e) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && id === requestId.current) {
+        setCompileError(true);
         setCompileMessage(e instanceof Error ? e.message : '生成失败');
+      }
     } finally {
       if (id === requestId.current) {
         setCompiling(false);
@@ -250,7 +263,14 @@ export default function App() {
     compileAbort.current?.abort();
     compileAbort.current = null;
     setCompiling(false);
+    setCompileError(false);
     setCompileMessage('已取消生成，可以修改需求后重试。');
+  }
+  function updatePrompt(next: string) {
+    if (compileAbort.current) cancelCompile();
+    setPrompt(next);
+    setCompileError(false);
+    setCompileMessage('');
   }
   function newRequest() {
     cancelCompile();
@@ -258,7 +278,10 @@ export default function App() {
     setTab('workbench');
     setPrompt('');
     setDraft(null);
-    setCompileMessage('输入一个新需求，编译器会建议最接近的场景模板。');
+    setCompileIntent('create');
+    setCompileMessage(
+      '选择停车休息、阅读或空气清新需求。本地模板只提供已知示例建议；明确数值请使用“修改当前场景”。',
+    );
   }
   function confirmDraft() {
     if (!draft) return;
@@ -290,7 +313,7 @@ export default function App() {
       setToast('请先核对并确认候选场景');
       return;
     }
-    if (runtime.current && active) {
+    if (runtime.current && !isTerminal(runtime.current.snapshot().status)) {
       setPlaying(true);
       return;
     }
@@ -307,7 +330,7 @@ export default function App() {
       return;
     }
     setPlaying(false);
-    if (!runtime.current || !active)
+    if (!runtime.current)
       runtime.current = new CabinRuntime(selected, vehicle, fault, `run-${Date.now()}`);
     const next = runtime.current.step();
     setSnapshot(next);
@@ -321,7 +344,12 @@ export default function App() {
   function replay() {
     if (!snapshot) return;
     setPlaying(false);
-    runtime.current = replayEvidence(snapshot);
+    try {
+      runtime.current = replayEvidence(snapshot);
+    } catch {
+      setToast('当前记录无法重放，请导出证据后核查运行时与输入轨迹。');
+      return;
+    }
     const next = runtime.current.snapshot();
     setSnapshot(next);
     setVehicle(next.vehicle);
@@ -425,6 +453,13 @@ export default function App() {
           <Code2 size={17} />
           能力目录<span className="nav-count">08</span>
         </button>
+        <button
+          className={`nav-item ${tab === 'evidence' ? 'active' : ''}`}
+          onClick={() => setTab('evidence')}
+        >
+          <Upload size={17} />
+          证据复核
+        </button>
         <div className="nav-section-heading">
           <span className="nav-label">场景库</span>
           <span className="small muted">3 个模板</span>
@@ -468,7 +503,7 @@ export default function App() {
             快速上手
             <ArrowUpRight size={14} />
           </button>
-          <span className="sidebar-version mono">CABINLAB / v0.1.0</span>
+          <span className="sidebar-version mono">CABINLAB / v{packageInfo.version}</span>
         </div>
       </aside>
 
@@ -478,14 +513,20 @@ export default function App() {
             工作空间
             <ChevronRight size={12} />
             <span>
-              {tab === 'catalog' ? '能力目录' : tab === 'verification' ? '验证报告' : '场景工作台'}
+              {tab === 'catalog'
+                ? '能力目录'
+                : tab === 'verification'
+                  ? '验证报告'
+                  : tab === 'evidence'
+                    ? '证据复核'
+                    : '场景工作台'}
             </span>
           </div>
           <div className="topbar-right">
             <span className="mode-badge">
               <span className={`live-dot ${providerMode === 'offline' ? 'offline' : ''}`} />
               {providerMode === 'model'
-                ? '模型已连接'
+                ? '模型服务已配置'
                 : providerMode === 'demo'
                   ? '本地模板模式'
                   : '服务连接中 / 离线'}
@@ -500,24 +541,30 @@ export default function App() {
                 <span className="tiny-line" /> SCENARIO PLAYGROUND
               </div>
               <h1>
-                {tab === 'catalog'
-                  ? '能力有边界，执行有依据。'
-                  : tab === 'verification'
-                    ? '让每一次执行，都有证据。'
-                    : '把想法，变成可验证的场景。'}
+                {tab === 'evidence'
+                  ? '导入证据，复现实验。'
+                  : tab === 'catalog'
+                    ? '能力有边界，执行有依据。'
+                    : tab === 'verification'
+                      ? '让每一次执行，都有证据。'
+                      : '把想法，变成可验证的场景。'}
               </h1>
               <p>
-                {tab === 'catalog'
-                  ? '8 个白名单能力 · 参数校验 · 前置条件 · 状态回读'
-                  : tab === 'verification'
-                    ? '使用独立产品基线，验证正常路径、边界条件和异常行为。'
-                    : '用自然语言编排，在虚拟座舱预演，带着证据启程。'}
+                {tab === 'evidence'
+                  ? '在独立虚拟运行中，核对输入、事件与设备终态。'
+                  : tab === 'catalog'
+                    ? '8 个白名单能力 · 参数校验 · 前置条件 · 状态回读'
+                    : tab === 'verification'
+                      ? '使用独立产品基线，验证正常路径、边界条件和异常行为。'
+                      : '用自然语言编排，在虚拟座舱预演，带着证据启程。'}
               </p>
             </div>
             <button
               className="button secondary export-top"
               onClick={() =>
                 downloadJson(`cabinlab-${selected.id}-v${selected.version}.json`, {
+                  format: 'cabinlab.experiment',
+                  schemaVersion: 1,
                   scenario: selected,
                   run: snapshot,
                   verification: report,
@@ -529,7 +576,9 @@ export default function App() {
             </button>
           </div>
 
-          {tab === 'catalog' ? (
+          {tab === 'evidence' ? (
+            <EvidenceInspector />
+          ) : tab === 'catalog' ? (
             <div className="catalog-grid">
               {Object.entries(catalog).map(([id, item], index) => (
                 <section className="panel capability-card" key={id}>
@@ -622,6 +671,11 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              <VersionComparison
+                key={`${selected.templateId}-${selected.version}`}
+                scenario={selected}
+                versions={currentVersions}
+              />
               <div className="workbench-grid">
                 <div className="compose-column">
                   <section className="panel composer">
@@ -631,6 +685,30 @@ export default function App() {
                       </span>
                       <span className="step-number mono">01</span>
                     </div>
+                    <div className="compile-intent" role="group" aria-label="需求操作">
+                      {(['create', 'modify'] as const).map((intent) => (
+                        <button
+                          key={intent}
+                          aria-pressed={compileIntent === intent}
+                          disabled={Boolean(draft)}
+                          onClick={() => {
+                            setCompileIntent(intent);
+                            updatePrompt(
+                              intent === 'create'
+                                ? templates[selected.templateId].sourcePrompt
+                                : '',
+                            );
+                          }}
+                        >
+                          {intent === 'create' ? '创建场景' : '修改当前场景'}
+                        </button>
+                      ))}
+                    </div>
+                    {compileIntent === 'modify' && (
+                      <p className="edit-context">
+                        基于「{selected.name} · v{selected.version}」；只修改明确提到的参数。
+                      </p>
+                    )}
                     <label className="sr-only" htmlFor="prompt">
                       自然语言需求
                     </label>
@@ -638,8 +716,12 @@ export default function App() {
                       id="prompt"
                       value={prompt}
                       maxLength={2000}
-                      placeholder="例如：停车休息时，太热就开空调，放点轻音乐……"
-                      onChange={(e) => setPrompt(e.target.value)}
+                      placeholder={
+                        compileIntent === 'modify'
+                          ? '例如：把持续时间改为 8 秒，目标温度设为 24°C'
+                          : '例如：停车休息时，太热就开空调，放点轻音乐……'
+                      }
+                      onChange={(e) => updatePrompt(e.target.value)}
                     />
                     <div className="prompt-footer">
                       <span>{prompt.length} / 2000</span>
@@ -647,7 +729,12 @@ export default function App() {
                     </div>
                     <button
                       className="button primary generate-button"
-                      disabled={compiling || prompt.trim().length < 4 || providerMode === 'offline'}
+                      disabled={
+                        compiling ||
+                        Boolean(draft) ||
+                        prompt.trim().length < 4 ||
+                        providerMode === 'offline'
+                      }
                       onClick={generate}
                     >
                       {compiling ? (
@@ -655,7 +742,11 @@ export default function App() {
                       ) : (
                         <WandSparkles size={15} />
                       )}
-                      {compiling ? '正在编排…' : '生成场景'}
+                      {compiling
+                        ? '正在编排…'
+                        : compileIntent === 'modify'
+                          ? '生成修改草案'
+                          : '生成场景'}
                       <ArrowRight size={15} />
                     </button>
                     {compiling && (
@@ -668,8 +759,26 @@ export default function App() {
                         ? '服务端模型编译 · 执行前需要确认'
                         : '本地模板建议 · 未调用实时 AI'}
                     </p>
+                    {compileIntent === 'modify' && (
+                      <details className="supported-edits">
+                        <summary>本地支持哪些修改？</summary>
+                        <p>
+                          支持持续时间（秒）、触发阈值（当前信号单位）和已有动作的目标温度（°C）、音量（%）、风量（档）、亮度（%）。用逗号分隔多项，所有内容都必须匹配；模糊值、增删动作和退出恢复需要另行明确。
+                        </p>
+                        <button
+                          className="text-button"
+                          disabled={Boolean(draft) || compiling}
+                          onClick={() => updatePrompt('把持续时间改为 0 秒')}
+                        >
+                          填入回归实验：持续时间改为 0 秒
+                        </button>
+                      </details>
+                    )}
                     {compileMessage && (
-                      <p className="compile-message" role="status">
+                      <p
+                        className={`compile-message ${compileError ? 'compile-error' : ''}`}
+                        role={compileError ? 'alert' : 'status'}
+                      >
                         {compileMessage}
                       </p>
                     )}
@@ -803,6 +912,17 @@ export default function App() {
                     </div>
                     {draft && (
                       <div className="confirm-area">
+                        <details className="draft-diff" open={compileIntent === 'modify'}>
+                          <summary>核对与已确认版本的差异</summary>
+                          <ScenarioDiff
+                            before={
+                              draft.templateId === selected.templateId
+                                ? selected
+                                : templates[draft.templateId]
+                            }
+                            after={draft}
+                          />
+                        </details>
                         <strong>
                           <ShieldCheck size={14} /> 运行前，请确认这些约定
                         </strong>
@@ -811,7 +931,17 @@ export default function App() {
                             <li key={text}>{text}</li>
                           ))}
                         </ul>
-                        <button className="button primary" onClick={confirmDraft}>
+                        {draftErrors.length > 0 && (
+                          <p className="compile-error" role="alert">
+                            当前参数超出范围或未填写完整。请检查传感器阈值、持续时间（0–60
+                            秒整数）和动作参数后再保存。
+                          </p>
+                        )}
+                        <button
+                          className="button primary"
+                          disabled={draftErrors.length > 0}
+                          onClick={confirmDraft}
+                        >
                           <Check size={14} />
                           确认参数并保存版本
                         </button>
@@ -1003,7 +1133,7 @@ export default function App() {
                           className="icon-button"
                           aria-label="重放执行证据"
                           title="重放执行证据"
-                          disabled={!snapshot}
+                          disabled={!snapshot || Boolean(draft)}
                           onClick={replay}
                         >
                           <RotateCcw size={15} />
@@ -1171,11 +1301,12 @@ export default function App() {
                     <strong>预演</strong> 开始虚拟时钟，调节传感器、挡位或注入故障，观察状态回读。
                   </li>
                   <li>
-                    <strong>验证</strong> 运行 20 项固定基线验证；把持续时间改为 0
-                    秒，保存后再次验证。
+                    <strong>验证</strong> 在“修改当前场景”输入“把持续时间改为 0
+                    秒”，核对差异并保存；展开版本对照，查看固定断言发现的新增失败。
                   </li>
                   <li>
-                    <strong>复现</strong> 暂停、单步、重放；导出场景、执行证据和验证报告。
+                    <strong>复现</strong>{' '}
+                    导出运行证据，再到“证据复核”导入，核对事件与终态是否可以复现。
                   </li>
                 </ol>
                 <p>

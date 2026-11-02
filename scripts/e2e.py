@@ -222,13 +222,168 @@ with sync_playwright() as p:
     page.get_by_role("button", name="场景工作台", exact=True).click()
     passed("版本本地持久化、DSL 弹窗键盘关闭、8 项能力目录")
 
+    page.get_by_role("button", name="修改当前场景", exact=True).click()
+    page.get_by_label("自然语言需求", exact=True).fill("把持续时间改为 8 秒，目标温度设为 22°C")
+    with page.expect_request("**/api/compile") as outgoing:
+        page.get_by_role("button", name="生成修改草案", exact=True).click()
+    body = outgoing.value.post_data_json
+    assert body["intent"] == "modify" and body["baseScenario"]["version"] == 1
+    expect(page.get_by_text("待确认草案", exact=True)).to_be_visible()
+    expect(page.locator(".draft-diff")).to_contain_text("8 秒")
+    expect(page.locator(".draft-diff")).to_contain_text("22°C")
+    expect(page.get_by_role("button", name="开始预演", exact=True)).to_be_disabled()
+    page.get_by_role("button", name="放弃本次修改", exact=True).click()
+    expect(page.get_by_label("持续时间", exact=True)).to_have_value("10")
+    expect(page.get_by_label("场景版本", exact=True)).to_have_value("1")
+    passed("一句话修改携带当前版本，差异可核对，放弃不会改写基准")
+
+    page.get_by_label("自然语言需求", exact=True).fill("把持续时间改为 0 秒")
+    page.get_by_role("button", name="生成修改草案", exact=True).click()
+    page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    expect(page.get_by_label("场景版本", exact=True)).to_have_value("4")
+    page.locator(".version-comparison > summary").click()
+    page.get_by_label("对照版本", exact=True).select_option("1")
+    page.get_by_role("button", name="对照验证两个版本", exact=True).click()
+    expect(page.get_by_text("新增失败 8 项", exact=True)).to_be_visible()
+    expect(page.locator(".comparison-stats")).to_contain_text("v1：20/20")
+    expect(page.locator(".comparison-stats")).to_contain_text("v4：12/20")
+    with page.expect_download() as info:
+        page.get_by_role("button", name="导出版本对照", exact=True).click()
+    info.value.save_as(ARTIFACTS / "version-comparison.json")
+    comparison = json.loads((ARTIFACTS / "version-comparison.json").read_text())
+    assert comparison["regressions"] == 8 and comparison["contractVersion"] == "1.0"
+    page.locator(".version-comparison").screenshot(path=str(ARTIFACTS / "version-comparison.png"))
+    passed("版本对照报告 20→12 与 8 项回归，导出保留两版独立验证证据")
+
+    page.get_by_label("场景版本", exact=True).select_option("1")
+    page.get_by_label("自然语言需求", exact=True).fill("停车休息时打开车窗")
+    page.get_by_role("button", name="生成场景", exact=True).click()
+    expect(page.get_by_role("alert")).to_contain_text("能力目录之外")
+    expect(page.get_by_text("待确认草案", exact=True)).to_have_count(0)
+    page.get_by_role("button", name="修改当前场景", exact=True).click()
+    page.get_by_label("自然语言需求", exact=True).fill("持续时间改为 5 秒，打开车窗")
+    page.get_by_role("button", name="生成修改草案", exact=True).click()
+    expect(page.get_by_role("alert")).to_contain_text("未应用任何部分")
+    expect(page.get_by_label("持续时间", exact=True)).to_have_value("10")
+    page.get_by_label("自然语言需求", exact=True).fill("持续时间改为 100 秒")
+    page.get_by_role("button", name="生成修改草案", exact=True).click()
+    expect(page.get_by_role("alert")).to_contain_text("超出允许范围")
+    page.get_by_label("自然语言需求", exact=True).fill("持续时间改为 9 秒")
+    page.get_by_role("button", name="生成修改草案", exact=True).click()
+    expect(page.get_by_text("待确认草案", exact=True)).to_be_visible()
+    page.get_by_role("button", name="放弃本次修改", exact=True).click()
+    page.get_by_label("持续时间", exact=True).fill("61")
+    expect(page.get_by_role("button", name="确认参数并保存版本", exact=True)).to_be_disabled()
+    expect(page.get_by_role("alert")).to_contain_text("超出范围")
+    page.get_by_role("button", name="放弃本次修改", exact=True).click()
+    passed("不支持能力、混合指令和非法数值明确报错，修正后可以继续")
+
+    page.get_by_role("button", name="创建场景", exact=True).click()
+    pending_routes = []
+    page.route("**/api/compile", lambda route: pending_routes.append(route))
+    page.get_by_role("button", name="生成场景", exact=True).click()
+    expect(page.get_by_role("button", name="取消生成", exact=True)).to_be_visible()
+    page.get_by_label("自然语言需求", exact=True).fill("停车空气闷，使用外循环")
+    for route in pending_routes:
+        try:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"mode": "demo", "draft": reading["scenario"], "message": "旧响应不可覆盖"}))
+        except Exception:
+            pass
+    expect(page.get_by_label("自然语言需求", exact=True)).to_have_value("停车空气闷，使用外循环")
+    expect(page.get_by_text("待确认草案", exact=True)).to_have_count(0)
+    expect(page.get_by_text("旧响应不可覆盖", exact=True)).to_have_count(0)
+    page.unroute("**/api/compile")
+    pending_routes = []
+    page.route("**/api/compile", lambda route: pending_routes.append(route))
+    page.get_by_role("button", name="生成场景", exact=True).click()
+    expect(page.get_by_role("button", name="取消生成", exact=True)).to_be_visible()
+    select_template("静心阅读")
+    for route in pending_routes:
+        try:
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"mode": "demo", "draft": successful["scenario"], "message": "旧场景不可覆盖"}))
+        except Exception:
+            pass
+    expect(page.locator(".workspace-toolbar")).to_contain_text("静心阅读")
+    expect(page.get_by_text("待确认草案", exact=True)).to_have_count(0)
+    page.unroute("**/api/compile")
+    select_template("午间休憩")
+    page.get_by_label("场景版本", exact=True).select_option("1")
+    page.get_by_role("button", name="单步前进一秒", exact=True).evaluate("button => { button.click(); button.click(); }")
+    expect(page.get_by_test_id("clock")).to_have_text("00:02")
+    page.get_by_role("button", name="停止预演", exact=True).click()
+    with page.expect_download() as info:
+        page.get_by_role("button", name="导出实验", exact=True).click()
+    info.value.save_as(ARTIFACTS / "experiment.json")
+    passed("修改输入和切换场景取消旧请求，同一批双击单步不会重建运行")
+
+    evidence_context = browser.new_context(viewport={"width": 1536, "height": 1150})
+    evidence_page = evidence_context.new_page()
+    evidence_page.on("pageerror", lambda error: errors.append(str(error)))
+    evidence_page.goto(BASE_URL)
+    evidence_page.wait_for_load_state("networkidle")
+    evidence_page.get_by_role("button", name="单步前进一秒", exact=True).click()
+    evidence_page.get_by_role("button", name="证据复核", exact=True).click()
+    evidence_page.get_by_label("导入证据文件", exact=True).set_input_files(ARTIFACTS / "run-success.json")
+    expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
+    with evidence_page.expect_download() as info:
+        evidence_page.get_by_role("button", name="导出复现证据", exact=True).click()
+    info.value.save_as(ARTIFACTS / "import-replayed.json")
+    imported = json.loads((ARTIFACTS / "import-replayed.json").read_text())
+    assert imported["events"] == successful["events"] and imported["vehicle"] == successful["vehicle"]
+    evidence_page.screenshot(path=str(ARTIFACTS / "evidence-inspector.png"), full_page=True)
+    evidence_page.get_by_role("button", name="场景工作台", exact=True).click()
+    expect(evidence_page.get_by_label("场景版本", exact=True)).to_have_value("1")
+    expect(evidence_page.get_by_test_id("clock")).to_have_text("00:01")
+    passed("新浏览器会话导入并独立重放，不覆盖当前版本和暂停中的运行")
+
+    evidence_page.get_by_role("button", name="证据复核", exact=True).click()
+    file_input = evidence_page.get_by_label("导入证据文件", exact=True)
+    file_input.set_input_files(ARTIFACTS / "run-timeout.json")
+    expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
+    expect(evidence_page.locator(".evidence-result")).to_contain_text("原始运行结果：部分完成")
+    tampered = json.loads(json.dumps(successful))
+    tampered["vehicle"]["targetTemperature"] = 23
+    (ARTIFACTS / "run-tampered.json").write_text(json.dumps(tampered))
+    file_input.set_input_files(ARTIFACTS / "run-tampered.json")
+    expect(evidence_page.get_by_role("alert")).to_contain_text("重放与记录不一致")
+    expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_have_count(0)
+    legacy = {key: value for key, value in successful.items() if key != "runtimeVersion"}
+    (ARTIFACTS / "run-legacy.json").write_text(json.dumps(legacy))
+    file_input.set_input_files(ARTIFACTS / "run-legacy.json")
+    expect(evidence_page.get_by_role("alert")).to_contain_text("运行时版本")
+    file_input.set_input_files({"name": "oversized.json", "mimeType": "application/json", "buffer": b"x" * (1024 * 1024 + 1)})
+    expect(evidence_page.get_by_role("alert")).to_contain_text("1 MB")
+    file_input.set_input_files(ARTIFACTS / "run-success.json")
+    expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
+    file_input.set_input_files(ARTIFACTS / "experiment.json")
+    expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
+    expect(evidence_page.locator(".evidence-result")).to_contain_text("原始运行结果：已停止")
+    passed("导入拒绝篡改、旧格式和超限文件；失败后可重试，完整实验可复现停止结果")
+    evidence_context.close()
+
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
+    assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)
     page.get_by_role("button", name="运行全部验证", exact=True).click()
     expect(page.get_by_text("当前验证全部通过", exact=True)).to_be_visible()
     passed("390px 移动布局无横向溢出且验证交互可用")
+
+    page.locator(".version-comparison > summary").click()
+    page.get_by_label("对照版本", exact=True).select_option("4")
+    page.get_by_role("button", name="对照验证两个版本", exact=True).click()
+    expect(page.get_by_text("恢复通过 8 项", exact=True)).to_be_visible()
+    assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    page.get_by_role("button", name="证据复核", exact=True).click()
+    page.get_by_label("导入证据文件", exact=True).set_input_files(ARTIFACTS / "run-timeout.json")
+    expect(page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
+    assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    if page.get_by_role("button", name="关闭提示", exact=True).is_visible():
+        page.get_by_role("button", name="关闭提示", exact=True).click()
+    page.screenshot(path=str(ARTIFACTS / "evidence-mobile.png"), full_page=True)
+    passed("390px 下版本对照与证据导入可操作，失败运行不会被解释成全部成功")
 
     assert not errors, errors
     passed("浏览器无未捕获 JavaScript 异常")

@@ -1,5 +1,7 @@
 import express from 'express';
+import packageInfo from '../package.json';
 import { compile, compileRequestSchema, type ProviderConfig } from './provider';
+import { CompileError } from '../src/domain/compiler';
 
 export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch) {
   const app = express();
@@ -24,19 +26,22 @@ export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch)
     }
     next();
   });
-  app.use(express.json({ limit: '12kb' }));
+  app.use(express.json({ limit: '24kb' }));
   app.get('/api/health', (_req, res) =>
     res.json({
       status: 'ok',
       mode: config.provider === 'demo' ? 'demo' : 'model',
-      version: '0.1.0',
+      version: packageInfo.version,
     }),
   );
   let inFlight = 0;
   app.post('/api/compile', async (req, res) => {
     const parsed = compileRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      res.status(400).json({ error: '请输入 4–2000 字的需求，并选择受支持的场景模板。' });
+      res.status(400).json({
+        code: 'invalid_request',
+        error: '请输入 4–2000 字的需求；修改时需要当前模板下的已确认合法场景。',
+      });
       return;
     }
     if (inFlight >= 2) {
@@ -51,10 +56,14 @@ export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch)
     res.on('close', onClose);
     try {
       res.json(await compile(parsed.data, config, fetcher, controller.signal));
-    } catch {
+    } catch (error) {
       if (!res.destroyed)
-        res.status(502).json({
-          error: '场景编译失败：请检查模型配置、连接或响应格式。未执行任何动作，可修改后重试。',
+        res.status(error instanceof CompileError ? error.status : 502).json({
+          code: error instanceof CompileError ? error.code : 'compile_failed',
+          error:
+            error instanceof CompileError
+              ? error.message
+              : '场景编译失败，未执行任何动作，请稍后重试。',
         });
     } finally {
       inFlight--;

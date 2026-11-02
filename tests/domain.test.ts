@@ -141,18 +141,19 @@ test('DSL 拒绝代码、未知字段与隐式恢复策略', () => {
   assert.equal(validateScenario({ ...scene, code: 'console.log(1)' }).scenario, undefined);
   assert.equal(validateScenario({ ...scene, exit: 'restore-everything' }).scenario, undefined);
 });
-test('草案编译明确标注本地模板，不假装理解自定义阈值', () => {
-  const result = compileDemo('超过 35 度时停车休息', 'rest');
+test('草案编译明确标注本地模板，自定义阈值需要明确修改', () => {
+  assert.throws(() => compileDemo('超过 35 度时停车休息'), /自定义数值/);
+  const result = compileDemo('停车休息太热就降温');
   assert.equal(result.mode, 'demo');
   assert.equal(result.draft.confirmed, false);
   assert.equal(result.draft.trigger.threshold, 28);
   assert.match(result.message, /不会提取自定义数值/);
   assert.throws(() => new CabinRuntime(result.draft));
 });
-test('本地建议选择正确的模板，未知需求仍需人工核对', () => {
-  assert.equal(compileDemo('停车看书，打开阅读灯', 'rest').draft.templateId, 'reading');
-  assert.equal(compileDemo('空气闷，开外循环', 'rest').draft.templateId, 'refresh');
-  assert.equal(compileDemo('这是未支持的新需求', 'reading').draft.templateId, 'reading');
+test('本地建议选择正确的模板，未知需求不会变成默认场景', () => {
+  assert.equal(compileDemo('停车看书，打开阅读灯').draft.templateId, 'reading');
+  assert.equal(compileDemo('空气闷，开外循环').draft.templateId, 'refresh');
+  assert.throws(() => compileDemo('这是未支持的新需求'), /无法匹配/);
 });
 test('模型无法绕过确认或篡改原始用户输入', () => {
   const value = { ...cloneTemplate('rest'), confirmed: true, version: 7, sourcePrompt: 'injected' };

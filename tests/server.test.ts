@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { createApp } from '../server/app';
 import { compile, configFromEnv, type ProviderConfig } from '../server/provider';
 import { cloneTemplate } from '../src/domain/templates';
+import { CompileError } from '../src/domain/compiler';
 
 const request = { prompt: '停车休息，太热就开空调', templateId: 'rest' };
 const modelConfig: ProviderConfig = {
@@ -120,7 +121,7 @@ test('HTTP 接口健康检查、编译、同源校验及体积限制', async (t)
   const large = await fetch(`${base}/api/compile`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...request, prompt: 'a'.repeat(15000) }),
+    body: JSON.stringify({ ...request, prompt: 'a'.repeat(30000) }),
   });
   assert.equal(large.status, 413);
   const missing = await fetch(`${base}/api/nope`);
@@ -256,4 +257,192 @@ test('浏览器取消请求会传递到上游模型调用', { timeout: 5000 }, a
   controller.abort();
   await rejected;
   await aborted;
+});
+
+const modelResponse = (value: unknown) =>
+  new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(value) } }] }));
+
+test('模型修改请求携带完整基准，未提及字段保留且必须重新确认', async () => {
+  const baseScenario = cloneTemplate('rest');
+  baseScenario.version = 4;
+  const result = await compile(
+    { ...request, intent: 'modify', prompt: '把持续时间改为 8 秒', baseScenario },
+    modelConfig,
+    async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const context = JSON.parse(body.messages[1].content);
+      assert.deepEqual(context.baseScenario, baseScenario);
+      assert.equal(context.instruction, '把持续时间改为 8 秒');
+      return modelResponse({
+        ...baseScenario,
+        trigger: { ...baseScenario.trigger, holdSeconds: 8 },
+      });
+    },
+  );
+  assert.equal(result.draft.trigger.holdSeconds, 8);
+  assert.deepEqual(result.draft.actions, baseScenario.actions);
+  assert.equal(result.draft.confirmed, false);
+});
+test('修改请求不能省略基准、伪造确认或更换模板归属', async () => {
+  for (const baseScenario of [
+    undefined,
+    { ...cloneTemplate('rest'), confirmed: false },
+    cloneTemplate('reading'),
+  ])
+    await assert.rejects(compile({ ...request, intent: 'modify', baseScenario }, modelConfig));
+  await assert.rejects(
+    compile(
+      { ...request, intent: 'modify', baseScenario: cloneTemplate('rest') },
+      modelConfig,
+      async () => modelResponse(cloneTemplate('reading')),
+    ),
+    /归属/,
+  );
+});
+test('模型可以返回澄清，模糊需求不会产生可执行草案', async () => {
+  await assert.rejects(
+    compile(request, modelConfig, async () =>
+      modelResponse({ clarification: '请明确持续多少秒。' }),
+    ),
+    (error: unknown) => error instanceof CompileError && error.code === 'needs_clarification',
+  );
+});
+
+for (const [status, code] of [
+  [401, 'provider_auth'],
+  [403, 'provider_auth'],
+  [429, 'provider_rate_limit'],
+  [500, 'provider_unavailable'],
+] as const)
+  test(`上游 HTTP ${status} 返回可操作的错误类别，不透出响应内容`, async () => {
+    let calls = 0;
+    await assert.rejects(
+      compile(request, modelConfig, async () => {
+        calls++;
+        return new Response('private-upstream-data', { status });
+      }),
+      (error: unknown) =>
+        error instanceof CompileError &&
+        error.code === code &&
+        !error.message.includes('private-upstream-data'),
+    );
+    assert.equal(calls, 1);
+  });
+
+test('无效的模型 JSON 和非法场景返回 provider_output', async () => {
+  for (const response of [
+    new Response('not-json'),
+    modelResponse({}),
+    modelResponse({
+      ...cloneTemplate('rest'),
+      actions: [{ capability: 'vehicle.drive', value: true }],
+    }),
+  ])
+    await assert.rejects(
+      compile(request, modelConfig, async () => response),
+      (error: unknown) => error instanceof CompileError && error.code === 'provider_output',
+    );
+});
+test('模型在响应头之前超时，会取消调用并返回明确超时原因', async (t) => {
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal);
+  const pending = compile(
+    request,
+    modelConfig,
+    async (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        deadline.abort(new DOMException('deadline', 'TimeoutError'));
+      }),
+  );
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof CompileError && error.code === 'provider_timeout',
+  );
+});
+test('模型响应头之后持续不结束，超时会中止响应流', async (t) => {
+  const deadline = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', () => deadline.signal);
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    pull() {
+      deadline.abort(new DOMException('deadline', 'TimeoutError'));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await assert.rejects(
+    compile(request, modelConfig, async () => new Response(stream)),
+    (error: unknown) => error instanceof CompileError && error.code === 'provider_timeout',
+  );
+  assert.equal(cancelled, true);
+});
+test('用户取消响应流时关闭读取器，并区别于模型超时', async () => {
+  const controller = new AbortController();
+  let cancelled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(reader) {
+      reader.enqueue(new TextEncoder().encode('{'));
+    },
+    pull() {
+      controller.abort();
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  await assert.rejects(
+    compile(request, modelConfig, async () => new Response(stream), controller.signal),
+    (error: unknown) => error instanceof CompileError && error.code === 'cancelled',
+  );
+  assert.equal(cancelled, true);
+});
+test('HTTP 对本地不支持需求返回 422，修正后仍可继续', async (t) => {
+  const server = createApp({ provider: 'demo' }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/compile`;
+  const send = (body: unknown) =>
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const unsupported = await send({ ...request, prompt: '停车时打开车窗' });
+  assert.equal(unsupported.status, 422);
+  assert.equal((await unsupported.json()).code, 'unsupported_request');
+  const valid = await send({
+    ...request,
+    intent: 'modify',
+    prompt: '持续时间改为 0 秒',
+    baseScenario: cloneTemplate('rest'),
+  });
+  assert.equal(valid.status, 200);
+  assert.equal((await valid.json()).draft.trigger.holdSeconds, 0);
+});
+
+test('最长中文需求与完整基准同时发送时仍在请求体限制内', async (t) => {
+  const baseScenario = cloneTemplate('rest');
+  baseScenario.sourcePrompt = '停车'.repeat(1000);
+  const server = createApp(modelConfig, async () => modelResponse(baseScenario)).listen(
+    0,
+    '127.0.0.1',
+  );
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const response = await fetch(
+    `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/compile`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...request,
+        intent: 'modify',
+        prompt: '修改'.repeat(1000),
+        baseScenario,
+      }),
+    },
+  );
+  assert.equal(response.status, 200);
 });

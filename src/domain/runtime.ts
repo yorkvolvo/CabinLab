@@ -29,6 +29,14 @@ export const vehicleSchema = z
 export type Vehicle = z.infer<typeof vehicleSchema>;
 export type Fault = Capability | 'none';
 export type RunStatus = 'armed' | 'executing' | 'completed' | 'partial' | 'stopped' | 'cancelled';
+export const runStatusLabels: Record<RunStatus, string> = {
+  armed: '等待触发',
+  executing: '正在执行',
+  completed: '执行完成',
+  partial: '部分完成',
+  stopped: '条件退出',
+  cancelled: '已停止',
+};
 export type EventKind =
   | 'armed'
   | 'condition'
@@ -61,6 +69,7 @@ export type RunCommand =
   | { time: number; type: 'cancel' };
 export interface RunEvidence {
   schemaVersion: 1;
+  runtimeVersion: '1.0.0';
   runId: string;
   scenario: Scenario;
   initialState: Vehicle;
@@ -340,6 +349,7 @@ export class CabinRuntime {
   snapshot(): RunSnapshot {
     return structuredClone({
       schemaVersion: 1,
+      runtimeVersion: '1.0.0',
       runId: this.runId,
       scenario: this.scenario,
       initialState: this.initialState,
@@ -372,14 +382,16 @@ export function replayEvidence(evidence: RunEvidence): CabinRuntime {
     evidence.fault,
     `${evidence.runId}-replay`,
   );
+  const advance = (target: number) => {
+    while (runtime.snapshot().time < target && !isTerminal(runtime.snapshot().status))
+      runtime.step(Math.min(600, target - runtime.snapshot().time));
+  };
   for (const command of evidence.commands) {
-    const delta = command.time - runtime.snapshot().time;
-    if (delta > 0) runtime.step(delta);
+    advance(command.time);
     if (command.type === 'signals') runtime.setSignals(command.patch);
     if (command.type === 'manual') runtime.manual(command.action);
     if (command.type === 'cancel') runtime.cancel();
   }
-  const remaining = evidence.time - runtime.snapshot().time;
-  if (remaining > 0) runtime.step(remaining);
+  advance(evidence.time);
   return runtime;
 }
