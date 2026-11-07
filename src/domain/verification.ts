@@ -50,6 +50,8 @@ const actionsMatch = (s: RunSnapshot, action: Action) => {
       return v.light === action.value;
     case 'seat.recline':
       return (action.seat === 'driver' ? v.driverRecline : v.passengerRecline) === action.value;
+    case 'seat.heat':
+      return v.driverHeat === action.value;
   }
 };
 
@@ -90,6 +92,81 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
       });
     }
   };
+
+  if (signal === 'elapsedSeconds' || signal === 'driverLeft' || signal === 'homeDistance') {
+    const { threshold } = baseline.trigger;
+    if (signal === 'elapsedSeconds') {
+      test('scheduled-time', '到预约时间才启动备车', '预约', () => {
+        const r = create();
+        expect(count(r.advanceTo(threshold - 1), 'accepted') === 0, '预约提前触发');
+        const s = r.advanceTo(threshold + baseline.actions.length);
+        expect(
+          s.status === 'completed' && baseline.actions.every((a) => actionsMatch(s, a)),
+          '备车回读与基线不符',
+        );
+        expect(s.events.find((e) => e.kind === 'accepted')?.time === threshold, '启动时间不符');
+        expect(replayEvidence(s).snapshot().status === 'completed', '预约无法重放');
+        return '预约时间和设备回读可重放';
+      });
+      test('scheduled-park', '预约前驶离时取消备车', '停车守卫', () => {
+        const r = create();
+        r.advanceTo(threshold - 1);
+        r.setSignals({ gear: 'D', speed: 10 });
+        const s = r.advanceTo(threshold + 10);
+        expect(s.status === 'stopped' && count(s, 'accepted') === 0, '驶离后仍发出动作');
+        return '等待期间也检查停车状态';
+      });
+    } else {
+      const text = baseline.reminder?.kind === 'message' ? baseline.reminder.text : undefined;
+      test('notice-once', '满足触发条件后只提示一次', '提醒', () => {
+        const r = create();
+        expect(count(r.step(5), 'reminder') === 0, '条件未满足就提醒');
+        if (signal === 'driverLeft') {
+          r.setSignals({ driverDoorOpen: true });
+          r.setSignals({ driverOccupied: false });
+          expect(count(r.step(3), 'reminder') === 0, '车门未关就提醒');
+          r.setSignals({ driverDoorOpen: false });
+        } else {
+          r.setSignals({ homeDistance: threshold });
+          expect(count(r.step(3), 'reminder') === 0, '恰好在范围边界就提醒');
+          r.setSignals({ homeDistance: threshold - 1 });
+        }
+        if (hold > 1) expect(count(r.step(hold - 1), 'reminder') === 0, '持续时间不足就提醒');
+        const s = r.step();
+        expect(
+          s.status === 'completed' && count(s, 'reminder') === 1 && count(s, 'accepted') === 0,
+          '提醒未完成或发出了车辆动作',
+        );
+        expect(s.events.find((e) => e.kind === 'reminder')?.detail === text, '提醒文案与基线不符');
+        expect(
+          count(r.step(5), 'reminder') === 1 &&
+            count(replayEvidence(s).snapshot(), 'reminder') === 1,
+          '提醒重复或无法重放',
+        );
+        return '只生成一次提醒，证据可重放';
+      });
+      test('initial-state', '未观察到离车或接近过程时保持等待', '提醒守卫', () => {
+        const r =
+          signal === 'driverLeft'
+            ? create({ ...initial, driverOccupied: false })
+            : create({ ...initial, homeDistance: threshold - 1 });
+        if (signal === 'driverLeft') {
+          r.setSignals({ driverDoorOpen: true });
+          r.setSignals({ driverDoorOpen: false });
+        }
+        expect(count(r.step(10), 'reminder') === 0, '只凭初始状态就提醒');
+        return '必须观察到离车或从范围外进入的过程';
+      });
+    }
+    return {
+      scenario: structuredClone(scenario),
+      contractVersion: '1.1',
+      baseline: `${baseline.name} · 固定基线 v1`,
+      passed: cases.filter((c) => c.passed).length,
+      total: cases.length,
+      cases,
+    };
+  }
 
   if (signal === 'driverExit') {
     const depart = (run: CabinRuntime) => {
@@ -259,6 +336,7 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
   }
 
   if (signal === 'petPresent') throw new Error('宠物监测基线缺少提醒');
+  if (reminder?.kind === 'message') throw new Error('文字提醒缺少专用触发条件');
   const active = initial[signal]!;
   if (reminder) {
     const readyTime = hold + baseline.actions.length;

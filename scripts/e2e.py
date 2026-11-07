@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.7.0"
+    assert unknown["runtimeVersion"] == "1.8.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -248,6 +248,10 @@ with sync_playwright() as p:
     page.get_by_role("button", name="重放执行证据", exact=True).click()
     expect(page.get_by_role("alert")).to_have_text("午休时间到，请醒来")
     assert page.evaluate("window.reminderTones") == 2
+    select_template("定时午休")
+    steps(6)
+    page.get_by_role("button", name="停止预演", exact=True).click()
+    expect(page.get_by_text("座椅角度：主驾 0°", exact=False)).to_be_visible()
     passed("定时午休准确唤醒并恢复座椅、空调和媒体，历史重放静音")
 
     select_template("充电等候")
@@ -448,6 +452,56 @@ with sync_playwright() as p:
     assert obstructed["vehicle"]["frontDefrost"] and obstructed["vehicle"]["mirrorHeat"]
     passed("雨天联动依次回读，关窗遇阻时仍执行独立的除雾和加热")
 
+    for title, seconds, checks_at_finish in [
+        ("预约暖舱", 300, {"targetTemperature": 26, "driverHeat": 2}),
+        ("预约预冷", 300, {"targetTemperature": 22, "fan": 4}),
+        ("预约换气", 120, {"recirculation": False, "fan": 3}),
+    ]:
+        select_template(title)
+        steps(1)
+        expect(page.get_by_text(f"距预约启动还有 {seconds - 1} 秒", exact=True)).to_be_visible()
+        page.get_by_role("button", name="快进到预约时间", exact=True).click()
+        steps(3)
+        scheduled = export_run(f"run-schedule-{seconds}-{title}.json")
+        assert scheduled["status"] == "completed"
+        assert next(e["time"] for e in scheduled["events"] if e["kind"] == "accepted") == seconds
+        assert all(scheduled["vehicle"][key] == value for key, value in checks_at_finish.items())
+    select_template("预约暖舱")
+    steps(1)
+    page.get_by_role("button", name="切换到 D 挡", exact=True).click()
+    expect(page.get_by_text("预约已取消", exact=True)).to_be_visible()
+    assert not any(e["kind"] == "accepted" for e in export_run("run-schedule-cancelled.json")["events"])
+    passed("预约暖舱、座椅加热、预冷与换气按时间执行，驶离取消")
+
+    select_template("离车带手机和包")
+    steps(1)
+    page.get_by_role("checkbox", name="主驾车门打开").check()
+    page.get_by_role("checkbox", name="主驾有人").uncheck()
+    steps(3)
+    expect(page.get_by_role("alert")).to_have_count(0)
+    page.get_by_role("checkbox", name="主驾车门打开").uncheck()
+    steps(1)
+    expect(page.get_by_role("alert")).to_have_text("请带好手机和包")
+    left = export_run("run-leave-notice.json")
+    assert [e["detail"] for e in left["events"] if e["kind"] == "reminder"] == ["请带好手机和包"]
+    assert not any(e["kind"] == "accepted" for e in left["events"])
+    passed("离车提醒按开门、离座、关门序列只提示一次")
+
+    select_template("到家取快递提醒")
+    expect(page.get_by_role("button", name="切换到 D 挡", exact=True)).to_have_attribute("aria-pressed", "true")
+    slider.fill("200")
+    steps(3)
+    expect(page.get_by_role("alert")).to_have_count(0)
+    slider.fill("199")
+    steps(2)
+    expect(page.get_by_role("alert")).to_have_text("到家前记得取快递")
+    home = export_run("run-home-notice.json")
+    assert home["vehicle"]["gear"] == "D" and home["vehicle"]["speed"] == 30
+    assert not any(e["kind"] == "accepted" for e in home["events"])
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    expect(page.get_by_role("alert")).to_have_text("到家前记得取快递")
+    passed("行驶中从范围外接近家只提示取件，证据可重放")
+
     migration_context = browser.new_context()
     old_versions = [
         {**successful["scenario"], "version": 7, "name": "我保存的午休"},
@@ -457,7 +511,7 @@ with sync_playwright() as p:
     migration_page = migration_context.new_page()
     migration_page.goto(BASE_URL)
     expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
-    assert migration_page.locator(".scenario-nav").count() == 15
+    assert migration_page.locator(".scenario-nav").count() == 20
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
@@ -497,11 +551,11 @@ with sync_playwright() as p:
     page.keyboard.press("Escape")
     expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name=re.compile("能力目录")).click()
-    assert page.locator(".capability-card").count() == 12
+    assert page.locator(".capability-card").count() == 13
     expect(page.get_by_text(re.compile("不能直接透传百分比"))).to_be_visible()
     expect(page.get_by_text(re.compile("阅读灯开关不能等同于亮度调节"))).to_be_visible()
     page.get_by_role("button", name="场景工作台", exact=True).click()
-    passed("版本本地持久化、DSL 弹窗键盘关闭、12 项能力目录")
+    passed("版本本地持久化、DSL 弹窗键盘关闭、13 项能力目录")
 
     for prompt in ["停车休息时不要开空调", "取消停车休息场景", "停车休息持续二十秒后开空调"]:
         page.get_by_label("自然语言需求", exact=True).fill(prompt)
@@ -658,7 +712,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
-    assert page.locator(".scenario-nav").count() == 15
+    assert page.locator(".scenario-nav").count() == 20
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

@@ -45,6 +45,8 @@ export const vehicleSchema = z
     windowsClosed: z.boolean().optional(),
     petPresent: z.boolean().optional(),
     mirrorHeat: z.boolean().optional(),
+    driverHeat: z.number().int().min(0).max(3).optional(),
+    homeDistance: z.number().min(0).max(5000).optional(),
   })
   .strict();
 export type Vehicle = z.infer<typeof vehicleSchema>;
@@ -65,6 +67,7 @@ export const signalsSchema = vehicleSchema
     rearOccupied: true,
     windowPathClear: true,
     petPresent: true,
+    homeDistance: true,
   })
   .partial()
   .strict();
@@ -99,6 +102,7 @@ export const runtimeVersionSchema = z.enum([
   '1.5.0',
   '1.6.0',
   '1.7.0',
+  '1.8.0',
 ]);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
@@ -206,6 +210,7 @@ const restoreFields: Record<Exclude<Capability, 'seat.recline'>, (keyof Vehicle)
   'media.volume': ['volume'],
   'ambient.light': ['light'],
   'mirror.heat': ['mirrorHeat'],
+  'seat.heat': ['driverHeat'],
   'window.close': [],
 };
 
@@ -214,7 +219,11 @@ export function previewVehicle(scenario: Scenario): Vehicle {
   const bounds = signalLabels[signal];
   const vehicle: Vehicle = {
     ...initialVehicle,
-    ...(signal === 'driverExit' || signal === 'petPresent'
+    ...(signal === 'driverExit' ||
+    signal === 'driverLeft' ||
+    signal === 'petPresent' ||
+    signal === 'elapsedSeconds' ||
+    signal === 'homeDistance'
       ? {}
       : {
           [signal]: Math.max(
@@ -224,7 +233,8 @@ export function previewVehicle(scenario: Scenario): Vehicle {
         }),
   };
   if (
-    (scenario.reminder && scenario.reminder.kind !== 'pet') ||
+    scenario.reminder?.kind === 'wake' ||
+    scenario.reminder?.kind === 'charge' ||
     scenario.actions.some((action) => action.capability === 'seat.recline')
   ) {
     vehicle.driverOccupied = true;
@@ -246,6 +256,12 @@ export function previewVehicle(scenario: Scenario): Vehicle {
   }
   if (scenario.actions.some((action) => action.capability === 'mirror.heat'))
     vehicle.mirrorHeat = false;
+  if (scenario.actions.some((action) => action.capability === 'seat.heat')) vehicle.driverHeat = 0;
+  if (signal === 'homeDistance') {
+    vehicle.homeDistance = Math.min(bounds.max, threshold + 100);
+    vehicle.gear = 'D';
+    vehicle.speed = 30;
+  }
   if (scenario.actions.some((action) => action.capability === 'climate.frontDefrost'))
     vehicle.frontDefrost = false;
   if (scenario.templateId === 'pickup' || scenario.templateId === 'passengerWait') {
@@ -257,6 +273,10 @@ export function previewVehicle(scenario: Scenario): Vehicle {
     vehicle.driverDoorOpen = false;
     vehicle.passengerOccupied = true;
     vehicle.rearOccupied = false;
+  }
+  if (signal === 'driverLeft') {
+    vehicle.driverOccupied = true;
+    vehicle.driverDoorOpen = false;
   }
   if (scenario.actions.some((action) => action.capability === 'window.close')) {
     vehicle.windowPathClear = true;
@@ -288,13 +308,14 @@ export class CabinRuntime {
   private reminderDueAt?: number;
   private petWarnings: string[] = [];
   private departure: 'unseen' | 'seated' | 'doorOpen' | 'exited' = 'unseen';
+  private observedOutsideHome = false;
 
   constructor(
     scenario: Scenario,
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.7.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.8.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -344,8 +365,17 @@ export class CabinRuntime {
       throw new Error('旧运行时不支持宠物监测或后视镜加热');
     if (!this.supportsContinuingPetMonitor && this.scenario.templateId === 'rainLink')
       throw new Error('旧运行时不支持雨天联动');
-    if (runtimeVersion !== '1.7.0' && this.restoresSettings)
+    if (!this.supportsExitSettings && this.restoresSettings)
       throw new Error('旧运行时不支持退出恢复');
+    if (
+      runtimeVersion !== '1.8.0' &&
+      (['elapsedSeconds', 'driverLeft', 'homeDistance'].includes(this.scenario.trigger.signal) ||
+        this.vehicle.driverHeat !== undefined ||
+        this.vehicle.homeDistance !== undefined ||
+        this.scenario.actions.some((action) => action.capability === 'seat.heat') ||
+        fault.startsWith('seat.heat'))
+    )
+      throw new Error('旧运行时不支持预约备车、离车及到家提醒');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
     this.log(
@@ -365,7 +395,7 @@ export class CabinRuntime {
       state: structuredClone(this.vehicle),
     });
     if (
-      this.runtimeVersion === '1.7.0' &&
+      this.supportsExitSettings &&
       capability === 'window.close' &&
       hasWindowResultReminder(this.scenario) &&
       ['confirmed', 'rejected', 'blocked', 'cancelled', 'timeout', 'unknown'].includes(kind)
@@ -393,7 +423,11 @@ export class CabinRuntime {
   }
 
   private get supportsContinuingPetMonitor(): boolean {
-    return this.runtimeVersion === '1.6.0' || this.runtimeVersion === '1.7.0';
+    return this.runtimeVersion === '1.6.0' || this.supportsExitSettings;
+  }
+
+  private get supportsExitSettings(): boolean {
+    return this.runtimeVersion === '1.7.0' || this.runtimeVersion === '1.8.0';
   }
 
   private get restoresSettings(): boolean {
@@ -402,23 +436,33 @@ export class CabinRuntime {
 
   private observeDeparture() {
     const { driverOccupied, driverDoorOpen, passengerOccupied, rearOccupied } = this.vehicle;
-    const passengerPresent = passengerOccupied === true || rearOccupied === true;
+    const departureEligible =
+      this.scenario.trigger.signal === 'driverLeft' ||
+      passengerOccupied === true ||
+      rearOccupied === true;
     if (driverOccupied === true && driverDoorOpen === false) this.departure = 'seated';
     else if (driverDoorOpen === true && this.departure === 'seated') this.departure = 'doorOpen';
     else if (driverDoorOpen === false && this.departure === 'doorOpen')
-      this.departure = driverOccupied === false && passengerPresent ? 'exited' : 'unseen';
+      this.departure = driverOccupied === false && departureEligible ? 'exited' : 'unseen';
     else if (this.departure === 'seated') this.departure = 'unseen';
     else if (
       this.departure === 'exited' &&
-      (driverOccupied !== false || driverDoorOpen !== false || !passengerPresent)
+      (driverOccupied !== false || driverDoorOpen !== false || !departureEligible)
     )
       this.departure = 'unseen';
   }
 
   private matches(): boolean {
     const { signal, operator, threshold } = this.scenario.trigger;
-    if (signal === 'driverExit') return this.departure === 'exited';
+    if (signal === 'driverExit' || signal === 'driverLeft') return this.departure === 'exited';
     if (signal === 'petPresent') return this.vehicle.petPresent === true;
+    if (signal === 'elapsedSeconds') return this.time >= threshold;
+    if (signal === 'homeDistance')
+      return (
+        this.observedOutsideHome &&
+        this.vehicle.homeDistance !== undefined &&
+        this.vehicle.homeDistance < threshold
+      );
     const value = this.vehicle[signal];
     return value !== undefined && (operator === 'gt' ? value > threshold : value < threshold);
   }
@@ -447,11 +491,18 @@ export class CabinRuntime {
 
   private evaluate() {
     if (isTerminal(this.status)) return;
-    if (!isParked(this.vehicle)) {
+    if (this.scenario.guard === 'parked' && !isParked(this.vehicle)) {
       this.stop('停车条件失效（需要 P 挡且车速为 0）；取消后续动作，不恢复设备');
       return;
     }
-    if (this.scenario.trigger.signal === 'driverExit') this.observeDeparture();
+    const { signal, threshold } = this.scenario.trigger;
+    if (signal === 'driverExit' || signal === 'driverLeft') this.observeDeparture();
+    if (
+      signal === 'homeDistance' &&
+      this.vehicle.homeDistance !== undefined &&
+      this.vehicle.homeDistance >= threshold
+    )
+      this.observedOutsideHome = true;
     if (this.fired && this.scenario.reminder?.kind === 'pet' && !this.matches()) {
       this.stop('宠物离舱或在舱状态未知；停止后续动作与监测');
       return;
@@ -572,6 +623,10 @@ export class CabinRuntime {
   private checkReminder() {
     const reminder = this.scenario.reminder;
     if (!reminder) return;
+    if (reminder.kind === 'message') {
+      this.emitReminder(reminder.text);
+      return;
+    }
     if (reminder.kind === 'pet') {
       const warnings = [];
       if (this.failures || this.uncertain.size || !this.vehicle.climatePower)
@@ -622,7 +677,9 @@ export class CabinRuntime {
         ? '存在结果未知的请求；可能已执行，不自动重试，请核实设备状态'
         : this.failures
           ? `部分完成：${this.failures} 项未达成，请检查证据`
-          : '全部动作状态已回读；本次场景结束',
+          : this.scenario.reminder?.kind === 'message'
+            ? '提醒已发出，本次场景结束'
+            : '全部动作状态已回读；本次场景结束',
     );
   }
 
@@ -696,6 +753,9 @@ export class CabinRuntime {
       case 'mirror.heat':
         this.vehicle.mirrorHeat = action.value;
         break;
+      case 'seat.heat':
+        this.vehicle.driverHeat = action.value;
+        break;
       case 'media.volume':
         this.vehicle.volume = action.value;
         break;
@@ -755,7 +815,8 @@ export class CabinRuntime {
       (!this.supportsReminders && reminderVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsRainPickup && rainPickupVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsDepartureWindow && departureWindowKeys.some((key) => key in allowed)) ||
-      (!this.supportsPetMirror && 'petPresent' in allowed)
+      (!this.supportsPetMirror && 'petPresent' in allowed) ||
+      (this.runtimeVersion !== '1.8.0' && 'homeDistance' in allowed)
     )
       throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
@@ -766,6 +827,7 @@ export class CabinRuntime {
   }
 
   manual(action: Action) {
+    if (this.scenario.reminder?.kind === 'message') throw new Error('提醒场景不执行车辆动作');
     const validated = validateScenario({
       ...this.scenario,
       actions: needsClimatePower(action.capability)
@@ -789,6 +851,11 @@ export class CabinRuntime {
       throw new Error('必须停车且确认窗路无障碍，才允许关闭车窗');
     if (action.capability === 'mirror.heat' && (!this.supportsPetMirror || !isParked(this.vehicle)))
       throw new Error('当前运行时或停车条件不允许操作后视镜加热');
+    if (
+      action.capability === 'seat.heat' &&
+      (this.runtimeVersion !== '1.8.0' || !isParked(this.vehicle))
+    )
+      throw new Error('必须停车才允许座椅预热');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
     const resource = resourceOf(action.capability);
     this.locked.add(resource);

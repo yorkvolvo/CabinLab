@@ -16,6 +16,7 @@ export const actionSchema = z.discriminatedUnion('capability', [
   z.object({ capability: z.literal('media.pause'), value: z.literal(true) }).strict(),
   z.object({ capability: z.literal('window.close'), value: z.literal(true) }).strict(),
   z.object({ capability: z.literal('mirror.heat'), value: z.boolean() }).strict(),
+  z.object({ capability: z.literal('seat.heat'), value: z.number().int().min(0).max(3) }).strict(),
   z
     .object({ capability: z.literal('media.volume'), value: z.number().int().min(0).max(60) })
     .strict(),
@@ -33,6 +34,7 @@ export const actionSchema = z.discriminatedUnion('capability', [
 export const reminderSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('wake'), afterSeconds: z.number().int().min(1).max(1800) }).strict(),
   z.object({ kind: z.literal('charge'), atPercent: z.number().int().min(1).max(100) }).strict(),
+  z.object({ kind: z.literal('message'), text: z.string().trim().min(1).max(80) }).strict(),
   z
     .object({
       kind: z.literal('pet'),
@@ -61,6 +63,11 @@ export const scenarioSchema = z
       'petWait',
       'rainMirror',
       'rainLink',
+      'preheat',
+      'precool',
+      'preVent',
+      'leaveReminder',
+      'homeReminder',
     ]),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
@@ -78,8 +85,11 @@ export const scenarioSchema = z
           'pickupDistance',
           'driverExit',
           'petPresent',
+          'elapsedSeconds',
+          'driverLeft',
+          'homeDistance',
         ]),
-        operator: z.enum(['gt', 'lt']),
+        operator: z.enum(['gt', 'lt', 'gte']),
         threshold: z.number().min(-50).max(10000),
         holdSeconds: z
           .number()
@@ -89,8 +99,8 @@ export const scenarioSchema = z
           .describe('持续时间指 trigger.holdSeconds：触发条件连续成立的秒数，不是动作超时。'),
       })
       .strict(),
-    guard: z.literal('parked'),
-    actions: z.array(actionSchema).min(1).max(8),
+    guard: z.enum(['parked', 'reminder-only']),
+    actions: z.array(actionSchema).max(8),
     reminder: reminderSchema.optional(),
     exit: z.enum(['cancel-pending-no-restore', 'cancel-pending-restore-settings']),
     timeoutSeconds: z
@@ -210,6 +220,14 @@ export const catalog: Record<
     result: '模拟座椅后仰角度回读',
     boundary: '只模拟前排座椅；角度不代表实车行程或防夹能力。',
   },
+  'seat.heat': {
+    label: '主驾座椅加热',
+    unit: '档',
+    range: '0–3 档，0 为关闭',
+    precondition: 'P 挡且车速为 0，允许空座预热',
+    result: '模拟座椅加热档位回读',
+    boundary: '仅预演主驾档位，不推断实车座椅温度。',
+  },
   'window.close': {
     label: '关闭四门车窗',
     unit: '',
@@ -237,18 +255,24 @@ export const signalLabels = {
   pickupDistance: { label: '距接娃点（模拟）', unit: 'm', min: 0, max: 500 },
   driverExit: { label: '主驾离车且仍有乘客', unit: '', min: 0, max: 1 },
   petPresent: { label: '已确认宠物在舱', unit: '', min: 0, max: 1 },
+  elapsedSeconds: { label: '预约启动时间', unit: '秒', min: 1, max: 1800 },
+  driverLeft: { label: '主驾离车', unit: '', min: 0, max: 1 },
+  homeDistance: { label: '距家距离（模拟）', unit: 'm', min: 0, max: 5000 },
 };
 
 export const seatLabels = { driver: '主驾', passenger: '副驾' };
 
 export function reminderLabel(reminder: Scenario['reminder']): string {
   if (!reminder) return '无提醒';
+  if (reminder.kind === 'message') return reminder.text;
   if (reminder.kind === 'pet')
     return `舱温达到 ${reminder.maxTemperature}°C 或电量降至 ${reminder.minBatteryPercent}% 时提醒`;
   return reminder.kind === 'wake'
     ? `准备完成后 ${reminder.afterSeconds} 秒唤醒`
     : `充电达到 ${reminder.atPercent}% 时提醒`;
 }
+
+export const operatorLabels = { gt: '高于', lt: '低于', gte: '达到' } as const;
 
 export function actionLabel(action: Action): string {
   if (action.capability === 'seat.recline')
@@ -291,6 +315,30 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
   if (seen.has('media.play') && seen.has('media.pause'))
     errors.push('同一场景不能同时播放与暂停媒体');
   const { signal, operator, threshold } = scenario.trigger;
+  const scheduled = ['preheat', 'precool', 'preVent'].includes(scenario.templateId);
+  const leave = scenario.templateId === 'leaveReminder';
+  const home = scenario.templateId === 'homeReminder';
+  if (
+    scheduled !== (signal === 'elapsedSeconds') ||
+    (scheduled &&
+      (operator !== 'gte' ||
+        !Number.isInteger(threshold) ||
+        scenario.trigger.holdSeconds !== 0 ||
+        scenario.reminder))
+  )
+    errors.push('预约备车需要设定整秒启动时间，达到时间后立即开始动作');
+  if (operator === 'gte' && !scheduled) errors.push('达到或超过仅用于预约时间');
+  if (leave !== (signal === 'driverLeft') || (leave && (operator !== 'gt' || threshold !== 0)))
+    errors.push('离车提醒需要主驾离车触发');
+  if (home !== (signal === 'homeDistance') || (home && (operator !== 'lt' || threshold <= 0)))
+    errors.push('到家提醒需要距家距离低于阈值');
+  if (
+    (leave || home) !== (scenario.reminder?.kind === 'message') ||
+    ((leave || home) && scenario.actions.length > 0)
+  )
+    errors.push('离车和到家场景仅允许文字提醒，不允许车辆动作');
+  if (!leave && !home && !scenario.actions.length) errors.push('当前场景需要至少一个动作');
+  if (home !== (scenario.guard === 'reminder-only')) errors.push('仅到家提醒允许非停车状态');
   if (scenario.exit === 'cancel-pending-restore-settings') {
     if (scenario.templateId !== 'nap' && scenario.templateId !== 'charging')
       errors.push('只有定时午休和充电等候支持退出恢复');

@@ -1,4 +1,10 @@
-import { actionLabel, reminderLabel, signalLabels, type Scenario } from './scenario';
+import {
+  actionLabel,
+  operatorLabels,
+  reminderLabel,
+  signalLabels,
+  type Scenario,
+} from './scenario';
 import { verifyScenario } from './verification';
 
 export interface ScenarioChange {
@@ -20,11 +26,7 @@ export function scenarioChanges(before: Scenario, after: Scenario): ScenarioChan
     signalLabels[before.trigger.signal].label,
     signalLabels[after.trigger.signal].label,
   );
-  add(
-    '比较关系',
-    before.trigger.operator === 'gt' ? '高于' : '低于',
-    after.trigger.operator === 'gt' ? '高于' : '低于',
-  );
+  add('比较关系', operatorLabels[before.trigger.operator], operatorLabels[after.trigger.operator]);
   add(
     '触发阈值',
     `${before.trigger.threshold} ${signalLabels[before.trigger.signal].unit}`,

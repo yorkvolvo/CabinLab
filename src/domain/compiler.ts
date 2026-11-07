@@ -2,6 +2,7 @@ import { cloneTemplate, templates } from './templates';
 import { z } from 'zod';
 import {
   hasWindowResultReminder,
+  operatorLabels,
   reminderLabel,
   scenarioSchema,
   signalLabels,
@@ -80,17 +81,27 @@ export interface CompileResult {
 export function assumptionsFor(scenario: Scenario): string[] {
   const { signal, operator, threshold, holdSeconds } = scenario.trigger;
   return [
-    '停车定义为 P 挡且车速为 0；任何动作前和状态回读前都会重新检查。',
-    signal === 'driverExit'
-      ? `观察到主驾在座、开门离座并关门，副驾或后排仍明确有人，持续 ${holdSeconds} 秒后开始。`
-      : signal === 'petPresent'
-        ? `确认宠物在舱，持续 ${holdSeconds} 秒后开始。离舱或驶离会停止流程。`
-        : `${signalLabels[signal].label}${operator === 'gt' ? '高于' : '低于'} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
-    scenario.reminder?.kind === 'pet'
-      ? `空调准备后开始监测，${reminderLabel(scenario.reminder)}。空调准备未确认或电量未知也会提醒。`
-      : scenario.reminder
-        ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。${scenario.exit === 'cancel-pending-restore-settings' ? '停车退出时恢复本场景改过的设置，跳过已接管或状态不明的设备。' : '退出保留已改变的设置。'}`
-        : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
+    scenario.guard === 'reminder-only'
+      ? '可在行驶时发出提醒，不执行车辆动作。'
+      : '停车定义为 P 挡且车速为 0；任何动作前和状态回读前都会重新检查。',
+    signal === 'elapsedSeconds'
+      ? `从预演开始计时，第 ${threshold} 秒启动备车。`
+      : signal === 'driverLeft'
+        ? `停车时观察主驾在座、开门离座并关门。离车状态持续 ${holdSeconds} 秒后提示。`
+        : signal === 'homeDistance'
+          ? `从范围外进入距家小于 ${threshold} m 的范围，持续 ${holdSeconds} 秒后提示。`
+          : signal === 'driverExit'
+            ? `观察到主驾在座、开门离座并关门，副驾或后排仍明确有人，持续 ${holdSeconds} 秒后开始。`
+            : signal === 'petPresent'
+              ? `确认宠物在舱，持续 ${holdSeconds} 秒后开始。离舱或驶离会停止流程。`
+              : `${signalLabels[signal].label}${operatorLabels[operator]} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
+    scenario.reminder?.kind === 'message'
+      ? `本次预演只提示一次「${scenario.reminder.text}」。`
+      : scenario.reminder?.kind === 'pet'
+        ? `空调准备后开始监测，${reminderLabel(scenario.reminder)}。空调准备未确认或电量未知也会提醒。`
+        : scenario.reminder
+          ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。${scenario.exit === 'cancel-pending-restore-settings' ? '停车退出时恢复本场景改过的设置，跳过已接管或状态不明的设备。' : '退出保留已改变的设置。'}`
+          : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
     ...(scenario.actions.some((action) => action.capability === 'seat.recline')
       ? ['对应座位需明确有人，座椅请求与回读前都会检查占用。']
       : []),
@@ -98,7 +109,11 @@ export function assumptionsFor(scenario: Scenario): string[] {
       ? ['请求与回读前均需确认窗路无障碍。']
       : []),
     ...(hasWindowResultReminder(scenario) ? ['关窗动作有结果时提示一次。'] : []),
-    `用户手动操作优先；每个动作 ${scenario.timeoutSeconds} 秒超时，失败后仅继续不依赖该动作的任务。`,
+    ...(scenario.actions.length
+      ? [
+          `用户手动操作优先；每个动作 ${scenario.timeoutSeconds} 秒超时，失败后仅继续不依赖该动作的任务。`,
+        ]
+      : []),
   ];
 }
 
@@ -188,9 +203,10 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
     { key: 'hold', names: '持续时间|等待时间', unit: '秒' },
     {
       key: 'threshold',
-      names: '触发阈值',
+      names:
+        base.trigger.signal === 'elapsedSeconds' ? '触发阈值|预约时间|预约启动时间' : '触发阈值',
       unit:
-        base.trigger.signal === 'pickupDistance'
+        base.trigger.signal === 'pickupDistance' || base.trigger.signal === 'homeDistance'
           ? 'm|米'
           : signalLabels[base.trigger.signal].unit === '°C'
             ? '°C|℃|度'
@@ -205,6 +221,7 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
     { key: 'pet-temperature', names: '高温提醒阈值|高温提醒温度', unit: '°C|℃|度' },
     { key: 'pet-battery', names: '低电量提醒阈值', unit: '%|％' },
     { key: 'seat.recline', names: '座椅后仰角度', unit: '°|度' },
+    { key: 'seat.heat', names: '主驾座椅加热|座椅加热档位', unit: '档' },
   ];
   const changed = new Set<string>();
   const clauses = prompt
@@ -212,6 +229,14 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
     .replace(/[。.!！]+$/, '')
     .split(/[，,；;\n]+/);
   for (const clause of clauses) {
+    const message = clause.trim().match(/^(?:请)?(?:把|将)?提醒文案(?:改为|设为)\s*(.+)$/);
+    if (message && draft.reminder?.kind === 'message') {
+      if (changed.has('message'))
+        throw new CompileError('ambiguous_edit', '请为提醒文案保留一个明确值。');
+      changed.add('message');
+      draft.reminder.text = message[1].trim();
+      continue;
+    }
     let matched = false;
     for (const field of fields) {
       const match = clause

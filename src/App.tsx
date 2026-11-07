@@ -42,6 +42,7 @@ import {
 import {
   catalog,
   hasWindowResultReminder,
+  operatorLabels,
   reminderLabel,
   seatLabels,
   signalLabels,
@@ -85,6 +86,11 @@ const icons = {
   petWait: PawPrint,
   rainMirror: CloudRain,
   rainLink: CloudRain,
+  preheat: Thermometer,
+  precool: Wind,
+  preVent: Wind,
+  leaveReminder: AlarmClock,
+  homeReminder: MapPin,
 };
 const eventLabels = {
   armed: '就绪',
@@ -140,12 +146,14 @@ export default function App() {
   const scenario = draft ?? selected;
   const currentVersions = versions.filter((s) => s.templateId === selected.templateId);
   const signal = scenario.trigger.signal;
-  const numericTrigger = signal !== 'driverExit' && signal !== 'petPresent';
+  const departureTrigger = signal === 'driverExit' || signal === 'driverLeft';
+  const numericTrigger = !departureTrigger && signal !== 'petPresent';
   const currentSignal = signalLabels[signal];
   const reminder = scenario.reminder;
   const hasSeatInputs = Boolean(
-    (reminder && reminder.kind !== 'pet') ||
-    signal === 'driverExit' ||
+    reminder?.kind === 'wake' ||
+    reminder?.kind === 'charge' ||
+    departureTrigger ||
     scenario.actions.some((action) => action.capability === 'seat.recline'),
   );
   const hasWindowAction = scenario.actions.some((action) => action.capability === 'window.close');
@@ -429,13 +437,16 @@ export default function App() {
   function stop() {
     setPlaying(false);
     const next = runtime.current?.cancel();
-    if (next) setSnapshot(next);
+    if (next) {
+      setSnapshot(next);
+      setVehicle(next.vehicle);
+    }
   }
-  function jumpToWake() {
-    if (draft || snapshot?.status !== 'waiting' || snapshot.reminderDueAt === undefined) return;
+  function jumpTo(target: number) {
+    if (draft || !active) return;
     enableReminderAudio();
     setPlaying(false);
-    const next = runtime.current?.advanceTo(snapshot.reminderDueAt);
+    const next = runtime.current?.advanceTo(target);
     if (next) {
       setSnapshot(next);
       setVehicle(next.vehicle);
@@ -916,13 +927,18 @@ export default function App() {
                         <h3>
                           {currentSignal.label}
                           {numericTrigger &&
-                            (scenario.trigger.operator === 'gt' ? ' 高于' : ' 低于')}
+                            signal !== 'elapsedSeconds' &&
+                            ` ${operatorLabels[scenario.trigger.operator]}`}
                         </h3>
                         <div className="trigger-inputs">
                           {numericTrigger && (
-                            <label>
+                            <label
+                              className={signal === 'elapsedSeconds' ? 'schedule-time' : undefined}
+                            >
                               <input
-                                aria-label="触发阈值"
+                                aria-label={
+                                  signal === 'elapsedSeconds' ? '预约启动时间' : '触发阈值'
+                                }
                                 type="number"
                                 min={currentSignal.min}
                                 max={currentSignal.max}
@@ -939,28 +955,35 @@ export default function App() {
                               <span>{currentSignal.unit}</span>
                             </label>
                           )}
-                          <span>持续</span>
-                          <label>
-                            <input
-                              aria-label="持续时间"
-                              type="number"
-                              min="0"
-                              max="60"
-                              value={scenario.trigger.holdSeconds}
-                              onChange={(e) =>
-                                editScenario({
-                                  trigger: {
-                                    ...scenario.trigger,
-                                    holdSeconds: Number(e.target.value),
-                                  },
-                                })
-                              }
-                            />
-                            <span>秒</span>
-                          </label>
+                          {signal !== 'elapsedSeconds' && (
+                            <>
+                              <span>持续</span>
+                              <label>
+                                <input
+                                  aria-label="持续时间"
+                                  type="number"
+                                  min="0"
+                                  max="60"
+                                  value={scenario.trigger.holdSeconds}
+                                  onChange={(e) =>
+                                    editScenario({
+                                      trigger: {
+                                        ...scenario.trigger,
+                                        holdSeconds: Number(e.target.value),
+                                      },
+                                    })
+                                  }
+                                />
+                                <span>秒</span>
+                              </label>
+                            </>
+                          )}
                         </div>
                         <span className="condition-chip">
-                          <ShieldCheck size={11} /> P 挡 + 车速为 0
+                          <ShieldCheck size={11} />{' '}
+                          {scenario.guard === 'reminder-only'
+                            ? '行驶时也可提醒'
+                            : 'P 挡 + 车速为 0'}
                           {reminder?.kind === 'charge' ? ' + 正在充电' : ''}
                         </span>
                       </div>
@@ -999,9 +1022,11 @@ export default function App() {
                                             ? 5
                                             : action.capability === 'media.volume'
                                               ? 60
-                                              : action.capability === 'seat.recline'
-                                                ? 45
-                                                : 100
+                                              : action.capability === 'seat.heat'
+                                                ? 3
+                                                : action.capability === 'seat.recline'
+                                                  ? 45
+                                                  : 100
                                       }
                                       onChange={(e) => updateAction(index, Number(e.target.value))}
                                     />
@@ -1073,7 +1098,25 @@ export default function App() {
                             </label>
                           </div>
                         )}
-                        {reminder && reminder.kind !== 'pet' && (
+                        {reminder?.kind === 'message' && (
+                          <div className="trigger-inputs">
+                            <label className="reminder-text">
+                              提醒文案
+                              <input
+                                type="text"
+                                aria-label="提醒文案"
+                                maxLength={80}
+                                value={reminder.text}
+                                onChange={(event) =>
+                                  editScenario({
+                                    reminder: { ...reminder, text: event.target.value },
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
+                        )}
+                        {(reminder?.kind === 'wake' || reminder?.kind === 'charge') && (
                           <div className="trigger-inputs">
                             <label>
                               <span>{reminder.kind === 'wake' ? '唤醒时间' : '提醒电量'}</span>
@@ -1105,17 +1148,21 @@ export default function App() {
                         <span className="flow-dot exit" />
                         <span className="flow-label">EXIT / 退出策略</span>
                         <p>
-                          {reminder?.kind === 'charge'
-                            ? '拔枪或驶离 → 取消后续动作与提醒'
-                            : reminder?.kind === 'wake'
-                              ? '驶离停止后续动作；主驾离座取消唤醒'
-                              : '开始行驶或条件失效 → 停止后续动作'}
+                          {reminder?.kind === 'message'
+                            ? '发出一次提醒后结束'
+                            : reminder?.kind === 'charge'
+                              ? '拔枪或驶离 → 取消后续动作与提醒'
+                              : reminder?.kind === 'wake'
+                                ? '驶离停止后续动作；主驾离座取消唤醒'
+                                : '开始行驶或条件失效 → 停止后续动作'}
                         </p>
-                        <span className="small muted">
-                          {scenario.exit === 'cancel-pending-restore-settings'
-                            ? '停车退出时恢复本场景改过的设置，座椅需确认有人'
-                            : '退出时保留已改变的设备设置'}
-                        </span>
+                        {reminder?.kind !== 'message' && (
+                          <span className="small muted">
+                            {scenario.exit === 'cancel-pending-restore-settings'
+                              ? '停车退出时恢复本场景改过的设置，座椅需确认有人'
+                              : '退出时保留已改变的设备设置'}
+                          </span>
+                        )}
                       </div>
                     </div>
                     {draft && (
@@ -1213,7 +1260,26 @@ export default function App() {
                         <span className="eyebrow">实时信号</span>
                         <span className="small muted">调整输入，观察场景响应</span>
                       </div>
-                      {numericTrigger && (
+                      {signal === 'elapsedSeconds' && (
+                        <div className="feedback-warning reminder-wait" role="status">
+                          <span>
+                            {snapshot?.status === 'stopped' || snapshot?.status === 'cancelled'
+                              ? '预约已取消'
+                              : snapshot && snapshot.status !== 'armed'
+                                ? '预约时间已到'
+                                : `距预约启动还有 ${scenario.trigger.threshold - (snapshot?.time ?? 0)} 秒`}
+                          </span>
+                          {snapshot?.status === 'armed' && (
+                            <button
+                              className="button secondary"
+                              onClick={() => jumpTo(scenario.trigger.threshold)}
+                            >
+                              快进到预约时间
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {numericTrigger && signal !== 'elapsedSeconds' && (
                         <div className="signal-control">
                           <label htmlFor="signal-slider">
                             <Thermometer size={14} />
@@ -1257,6 +1323,11 @@ export default function App() {
                       {vehicle.frontDefrost !== undefined && (
                         <p className="small muted" role="status">
                           前挡除雾回读：{vehicle.frontDefrost ? '已开启' : '已关闭'}
+                        </p>
+                      )}
+                      {vehicle.driverHeat !== undefined && (
+                        <p className="small muted" role="status">
+                          主驾座椅加热回读：{vehicle.driverHeat} 档
                         </p>
                       )}
                       {vehicle.mirrorHeat !== undefined && (
@@ -1321,16 +1392,18 @@ export default function App() {
                             />{' '}
                             主驾有人
                           </label>
-                          <label>
-                            <input
-                              type="checkbox"
-                              checked={vehicle.passengerOccupied === true}
-                              onChange={(event) =>
-                                changeSignals({ passengerOccupied: event.target.checked })
-                              }
-                            />{' '}
-                            副驾有人
-                          </label>
+                          {signal !== 'driverLeft' && (
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={vehicle.passengerOccupied === true}
+                                onChange={(event) =>
+                                  changeSignals({ passengerOccupied: event.target.checked })
+                                }
+                              />{' '}
+                              副驾有人
+                            </label>
+                          )}
                           {reminder?.kind === 'charge' && (
                             <label>
                               <input
@@ -1343,7 +1416,7 @@ export default function App() {
                               已插枪充电
                             </label>
                           )}
-                          {signal === 'driverExit' ? (
+                          {departureTrigger ? (
                             <>
                               <label>
                                 <input
@@ -1355,16 +1428,18 @@ export default function App() {
                                 />{' '}
                                 主驾车门打开
                               </label>
-                              <label>
-                                <input
-                                  type="checkbox"
-                                  checked={vehicle.rearOccupied === true}
-                                  onChange={(event) =>
-                                    changeSignals({ rearOccupied: event.target.checked })
-                                  }
-                                />{' '}
-                                后排有人
-                              </label>
+                              {signal === 'driverExit' && (
+                                <label>
+                                  <input
+                                    type="checkbox"
+                                    checked={vehicle.rearOccupied === true}
+                                    onChange={(event) =>
+                                      changeSignals({ rearOccupied: event.target.checked })
+                                    }
+                                  />{' '}
+                                  后排有人
+                                </label>
+                              )}
                               <small>
                                 开始预演或单步后，打开主驾车门、取消「主驾有人」，再关闭车门。
                               </small>
@@ -1428,36 +1503,38 @@ export default function App() {
                           <span>km/h</span>
                         </label>
                       </div>
-                      <div className="fault-controls">
-                        <label>
-                          故障注入
-                          <select
-                            aria-label="故障注入"
-                            disabled={Boolean(active)}
-                            value={fault}
-                            onChange={(e) => setFault(faultSchema.parse(e.target.value))}
-                          >
-                            <option value="none">无故障</option>
-                            {selected.actions.map((a) => (
-                              <optgroup key={a.capability} label={catalog[a.capability].label}>
-                                <option value={a.capability}>
-                                  {catalog[a.capability].label}超时
-                                </option>
-                                <option value={`${a.capability}:rejected`}>
-                                  {catalog[a.capability].label}请求被拒绝
-                                </option>
-                                <option value={`${a.capability}:feedback-lost`}>
-                                  {catalog[a.capability].label}回读丢失（结果未知）
-                                </option>
-                              </optgroup>
-                            ))}
-                          </select>
-                        </label>
-                        <button className="manual-button" onClick={manualOverride}>
-                          <SlidersHorizontal size={12} />
-                          {manualLight ? '手动设灯 25%' : '手动设温 27°C'}
-                        </button>
-                      </div>
+                      {scenario.actions.length > 0 && (
+                        <div className="fault-controls">
+                          <label>
+                            故障注入
+                            <select
+                              aria-label="故障注入"
+                              disabled={Boolean(active)}
+                              value={fault}
+                              onChange={(e) => setFault(faultSchema.parse(e.target.value))}
+                            >
+                              <option value="none">无故障</option>
+                              {selected.actions.map((a) => (
+                                <optgroup key={a.capability} label={catalog[a.capability].label}>
+                                  <option value={a.capability}>
+                                    {catalog[a.capability].label}超时
+                                  </option>
+                                  <option value={`${a.capability}:rejected`}>
+                                    {catalog[a.capability].label}请求被拒绝
+                                  </option>
+                                  <option value={`${a.capability}:feedback-lost`}>
+                                    {catalog[a.capability].label}回读丢失（结果未知）
+                                  </option>
+                                </optgroup>
+                              ))}
+                            </select>
+                          </label>
+                          <button className="manual-button" onClick={manualOverride}>
+                            <SlidersHorizontal size={12} />
+                            {manualLight ? '手动设灯 25%' : '手动设温 27°C'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="playback-bar">
                       <div className="playback-buttons">
@@ -1522,7 +1599,10 @@ export default function App() {
                             : reminderLabel(snapshot.scenario.reminder)}
                         </span>
                         {snapshot.reminderDueAt !== undefined && (
-                          <button className="button secondary" onClick={jumpToWake}>
+                          <button
+                            className="button secondary"
+                            onClick={() => jumpTo(snapshot.reminderDueAt!)}
+                          >
                             快进到唤醒
                           </button>
                         )}

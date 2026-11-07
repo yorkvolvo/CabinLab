@@ -47,24 +47,41 @@ batch: for (const model of models) {
     for (const baseline of baselines) {
       let base: Scenario = structuredClone(baseline);
       for (const intent of ['create', 'modify'] as const) {
-        const numeric = base.actions.find((action) => typeof action.value === 'number');
+        const scheduled = base.trigger.signal === 'elapsedSeconds';
+        const message = base.reminder?.kind === 'message';
+        const numeric = base.actions.find((action) =>
+          base.templateId === 'preheat'
+            ? action.capability === 'seat.heat'
+            : typeof action.value === 'number',
+        );
         const changed =
           numeric &&
           Math.min(
             Number(numeric.value) + 1,
-            numeric.capability === 'climate.fan'
-              ? 5
-              : numeric.capability === 'climate.temperature'
-                ? 30
-                : numeric.capability === 'ambient.light'
-                  ? 100
-                  : numeric.capability === 'seat.recline'
-                    ? 45
-                    : 60,
+            numeric.capability === 'seat.heat'
+              ? 3
+              : numeric.capability === 'climate.fan'
+                ? 5
+                : numeric.capability === 'climate.temperature'
+                  ? 30
+                  : numeric.capability === 'ambient.light'
+                    ? 100
+                    : numeric.capability === 'seat.recline'
+                      ? 45
+                      : 60,
           );
         const expected = structuredClone(intent === 'create' ? baseline : base);
         if (intent === 'modify') {
-          if (expected.reminder?.kind === 'wake') expected.reminder.afterSeconds += 60;
+          if (scheduled) expected.trigger.threshold += 60;
+          else if (expected.reminder?.kind === 'message') {
+            if (expected.templateId === 'homeReminder') {
+              expected.trigger.threshold += 100;
+              expected.reminder.text = '快到家了，请记得取快递';
+            } else {
+              expected.trigger.holdSeconds += 2;
+              expected.reminder.text = '下车前请检查手机和包';
+            }
+          } else if (expected.reminder?.kind === 'wake') expected.reminder.afterSeconds += 60;
           else if (expected.reminder?.kind === 'charge') expected.reminder.atPercent += 5;
           else if (expected.reminder?.kind === 'pet') expected.reminder.maxTemperature += 1;
           else if (expected.templateId === 'pickup') expected.trigger.threshold += 20;
@@ -77,7 +94,8 @@ batch: for (const model of models) {
         }
         const prompt =
           intent === 'create'
-            ? baseline.reminder ||
+            ? scheduled ||
+              baseline.reminder ||
               [
                 'rainDefog',
                 'pickup',
@@ -88,7 +106,11 @@ batch: for (const model of models) {
               ].includes(baseline.templateId)
               ? baseline.sourcePrompt
               : `创建“${baseline.name}”。仅 P 挡且车速为 0，${signalLabels[baseline.trigger.signal].label}${baseline.trigger.operator === 'gt' ? '高于' : '低于'} ${baseline.trigger.threshold}${signalLabels[baseline.trigger.signal].unit}连续 ${baseline.trigger.holdSeconds} 秒，依次执行：${baseline.actions.map(actionLabel).join('；')}。开始行驶或触发条件失效时停止后续动作，不恢复旧值。`
-            : `只修改这两项：${expected.reminder?.kind === 'pet' ? `高温提醒阈值改为 ${expected.reminder.maxTemperature}°C` : expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${numeric ? `${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}` : '模拟雨量等级的触发阈值改为 2 级，仍须高于阈值'}。其余字段、动作及顺序全部原样保留，不增删动作。`;
+            : scheduled && numeric
+              ? `只修改两项：预约启动时间改为预演开始后 ${expected.trigger.threshold} 秒；${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}。保留其余字段与动作顺序。`
+              : message && expected.reminder?.kind === 'message'
+                ? `只修改两项：${expected.templateId === 'homeReminder' ? `距家阈值改为 ${expected.trigger.threshold} 米，仍然要求小于阈值` : `离车状态持续时间改为 ${expected.trigger.holdSeconds} 秒`}；提醒文案改为「${expected.reminder.text}」。其余保持原样。`
+                : `只修改这两项：${expected.reminder?.kind === 'pet' ? `高温提醒阈值改为 ${expected.reminder.maxTemperature}°C` : expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${numeric ? `${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}` : '模拟雨量等级的触发阈值改为 2 级，仍须高于阈值'}。其余字段、动作及顺序全部原样保留，不增删动作。`;
         const started = performance.now();
         let passed = false;
         let error: string | undefined;
@@ -133,6 +155,7 @@ batch: for (const model of models) {
           assert.equal(result.draft.templateId, baseline.templateId);
           if (intent === 'create') {
             assert.equal(result.draft.exit, baseline.exit);
+            assert.equal(result.draft.guard, baseline.guard);
             assert.deepEqual(result.draft.trigger, baseline.trigger);
             assert.deepEqual(result.draft.actions, baseline.actions);
             assert.deepEqual(result.draft.reminder, baseline.reminder);
@@ -233,6 +256,50 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
   const reminder = expected.reminder;
   const readyAt = expected.trigger.holdSeconds + expected.actions.length;
   const runtime = new CabinRuntime(scene, initial);
+  if (expected.trigger.signal === 'elapsedSeconds') {
+    const at = expected.trigger.threshold;
+    assert.equal(runtime.advanceTo(at - 1).events.filter((e) => e.kind === 'accepted').length, 0);
+    const complete = runtime.advanceTo(at + expected.actions.length);
+    assert.equal(complete.status, 'completed');
+    assert.equal(complete.events.find((e) => e.kind === 'accepted')?.time, at);
+    const fields = {
+      'climate.power': 'climatePower',
+      'climate.temperature': 'targetTemperature',
+      'climate.fan': 'fan',
+      'climate.recirculation': 'recirculation',
+      'seat.heat': 'driverHeat',
+    } as const;
+    for (const action of expected.actions) {
+      const field = fields[action.capability as keyof typeof fields];
+      assert.ok(field);
+      assert.equal(complete.vehicle[field], action.value);
+    }
+    assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
+    return { status: complete.status, confirmedActions: expected.actions.length };
+  }
+  if (reminder?.kind === 'message') {
+    const { threshold, holdSeconds } = expected.trigger;
+    assert.equal(runtime.step().status, 'armed');
+    if (expected.trigger.signal === 'driverLeft') {
+      runtime.setSignals({ driverDoorOpen: true });
+      runtime.setSignals({ driverOccupied: false });
+      assert.equal(runtime.step().status, 'armed');
+      runtime.setSignals({ driverDoorOpen: false });
+    } else {
+      runtime.setSignals({ homeDistance: threshold });
+      assert.equal(runtime.step().status, 'armed');
+      runtime.setSignals({ homeDistance: threshold - 1 });
+    }
+    const complete = runtime.step(holdSeconds);
+    assert.equal(complete.status, 'completed');
+    assert.deepEqual(
+      complete.events.filter((e) => e.kind === 'reminder').map((e) => e.detail),
+      [reminder.text],
+    );
+    assert.ok(!complete.events.some((e) => e.kind === 'accepted'));
+    assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
+    return { status: complete.status, reminderTime: complete.time };
+  }
   if (!reminder) {
     const { signal, threshold, holdSeconds } = expected.trigger;
     if (signal === 'driverExit') {

@@ -232,6 +232,76 @@ export const templates: Record<TemplateId, Scenario> = {
       { capability: 'mirror.heat', value: true },
     ],
   },
+  preheat: {
+    ...base,
+    id: 'preheat',
+    templateId: 'preheat',
+    name: '预约暖舱',
+    description: '在预定的虚拟时间开启空调与主驾座椅加热。',
+    sourcePrompt:
+      '创建预约暖舱。预演开始后 300 秒预约启动，保持 P 挡且车速为 0，依次开启空调电源、设目标温度为 26°C、设主驾座椅加热 2 档。允许空座预热，驶离取消，保留已完成设置。',
+    trigger: { signal: 'elapsedSeconds', operator: 'gte', threshold: 300, holdSeconds: 0 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 26 },
+      { capability: 'seat.heat', value: 2 },
+    ],
+  },
+  precool: {
+    ...base,
+    id: 'precool',
+    templateId: 'precool',
+    name: '预约预冷',
+    description: '在预定的虚拟时间开启空调预冷。',
+    sourcePrompt:
+      '创建预约预冷。预演开始后 300 秒预约启动，保持 P 挡且车速为 0，依次开启空调电源、设目标温度为 22°C、设风量 4 档。驶离取消，保留已完成设置。',
+    trigger: { signal: 'elapsedSeconds', operator: 'gte', threshold: 300, holdSeconds: 0 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 22 },
+      { capability: 'climate.fan', value: 4 },
+    ],
+  },
+  preVent: {
+    ...base,
+    id: 'preVent',
+    templateId: 'preVent',
+    name: '预约换气',
+    description: '在预定的虚拟时间切换外循环换气。',
+    sourcePrompt:
+      '创建预约换气。预演开始后 120 秒预约启动，保持 P 挡且车速为 0，依次开启空调电源、关闭内循环（使用外循环）、设风量 3 档。驶离取消，保留已完成设置。',
+    trigger: { signal: 'elapsedSeconds', operator: 'gte', threshold: 120, holdSeconds: 0 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.recirculation', value: false },
+      { capability: 'climate.fan', value: 3 },
+    ],
+  },
+  leaveReminder: {
+    ...base,
+    id: 'leaveReminder',
+    templateId: 'leaveReminder',
+    name: '离车带手机和包',
+    description: '确认主驾离车后提醒带好随身物品。',
+    sourcePrompt:
+      '创建离车带手机和包。停车时观察主驾在座、开门离座并关门，主驾离车状态持续 1 秒后，只提醒一次「请带好手机和包」，不执行车辆动作，也不要求车内有乘客。',
+    trigger: { signal: 'driverLeft', operator: 'gt', threshold: 0, holdSeconds: 1 },
+    actions: [],
+    reminder: { kind: 'message', text: '请带好手机和包' },
+  },
+  homeReminder: {
+    ...base,
+    id: 'homeReminder',
+    templateId: 'homeReminder',
+    name: '到家取快递提醒',
+    description: '从范围外接近家时发出一次取件提醒。',
+    sourcePrompt:
+      '创建到家取快递提醒。模拟距离从范围外进入距家小于 200 米且持续 2 秒时，只提醒一次「到家前记得取快递」。允许行驶中提示，不执行车辆动作。',
+    trigger: { signal: 'homeDistance', operator: 'lt', threshold: 200, holdSeconds: 2 },
+    guard: 'reminder-only',
+    actions: [],
+    reminder: { kind: 'message', text: '到家前记得取快递' },
+  },
 };
 
 export function cloneTemplate(id: TemplateId): Scenario {

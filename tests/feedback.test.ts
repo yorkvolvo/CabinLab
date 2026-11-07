@@ -14,6 +14,7 @@ import { cloneTemplate, templates } from '../src/domain/templates';
 
 for (const id of Object.keys(templates) as TemplateId[]) {
   const scenario = cloneTemplate(id);
+  if (scenario.actions.length === 0) continue;
   const initial = previewVehicle(scenario);
   const capability = scenario.actions[0].capability;
   const finish = (runtime: CabinRuntime) => {
@@ -23,7 +24,9 @@ for (const id of Object.keys(templates) as TemplateId[]) {
       runtime.setSignals({ driverDoorOpen: false });
     }
     if (id === 'petWait') runtime.setSignals({ petPresent: true });
-    const snapshot = runtime.step(90);
+    const snapshot = runtime.advanceTo(
+      scenario.trigger.signal === 'elapsedSeconds' ? scenario.trigger.threshold + 90 : 90,
+    );
     if (snapshot.reminderDueAt !== undefined) return runtime.advanceTo(snapshot.reminderDueAt);
     if (scenario.reminder?.kind === 'charge')
       return runtime.setSignals({ batteryPercent: scenario.reminder.atPercent });

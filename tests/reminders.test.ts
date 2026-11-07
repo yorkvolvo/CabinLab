@@ -5,9 +5,29 @@ import { cloneTemplate } from '../src/domain/templates';
 import { parseModelModification, modifyDemo } from '../src/domain/compiler';
 import { inspectEvidence } from '../src/domain/evidence';
 import { scenarioChanges } from '../src/domain/comparison';
+import { validateScenario } from '../src/domain/scenario';
 
 const nap = () => cloneTemplate('nap');
 const charge = () => cloneTemplate('charging');
+
+test('到家提醒的行驶豁免不能被用于车辆动作', () => {
+  const scene = cloneTemplate('homeReminder');
+  assert.equal(
+    validateScenario({ ...scene, actions: [{ capability: 'climate.power', value: true }] })
+      .scenario,
+    undefined,
+  );
+  assert.equal(
+    validateScenario({ ...cloneTemplate('preheat'), guard: 'reminder-only' }).scenario,
+    undefined,
+  );
+  const runtime = new CabinRuntime(scene, previewVehicle(scene));
+  assert.throws(
+    () => runtime.manual({ capability: 'climate.power', value: true }),
+    /不执行车辆动作/,
+  );
+  assert.equal(runtime.snapshot().vehicle.climatePower, false);
+});
 
 test('等候时环境恢复不清除午休唤醒，跳到边界只提醒一次且可重放', () => {
   const scene = nap();

@@ -838,6 +838,16 @@ main {
 .trigger-inputs label:last-child input {
   width: 23px;
 }
+.trigger-inputs label.schedule-time input {
+  width: 64px;
+}
+.trigger-inputs label.reminder-text {
+  width: 100%;
+}
+.trigger-inputs label.reminder-text input {
+  flex: 1;
+  min-width: 0;
+}
 .trigger-inputs label > span {
   color: #9aab9d;
   font-size: 10px;
