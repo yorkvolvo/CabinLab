@@ -1,8 +1,18 @@
 import { z } from 'zod';
-import { actionSchema, catalog, resourceSchema, scenarioSchema, type Capability } from './scenario';
+import {
+  actionSchema,
+  catalog,
+  resourceSchema,
+  scenarioSchema,
+  type Capability,
+  type Scenario,
+} from './scenario';
 import {
   faultSchema,
   replayEvidence,
+  runCommandLimit,
+  runEventLimit,
+  runTimeLimit,
   runtimeVersionSchema,
   signalsSchema,
   vehicleSchema,
@@ -11,7 +21,7 @@ import {
 
 export const evidenceMaxBytes = 1024 * 1024;
 const capabilitySchema = z.enum(Object.keys(catalog) as [Capability, ...Capability[]]);
-const timeSchema = z.number().int().min(0).max(3600);
+const timeSchema = z.number().int().min(0).max(runTimeLimit);
 const evidenceSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -66,7 +76,7 @@ const evidenceSchema = z
           .strict(),
       )
       .min(1)
-      .max(4096),
+      .max(runEventLimit),
     commands: z
       .array(
         z.discriminatedUnion('type', [
@@ -75,7 +85,7 @@ const evidenceSchema = z
           z.object({ time: timeSchema, type: z.literal('cancel') }).strict(),
         ]),
       )
-      .max(1000),
+      .max(runCommandLimit),
     caveat: z.string().max(500),
     progress: z.number().min(0).max(1),
     holdElapsed: timeSchema,
@@ -95,6 +105,28 @@ function canonical(value: unknown): string {
       .map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`)
       .join(',')}}`;
   return JSON.stringify(value) ?? 'undefined';
+}
+
+type EvidenceDocument =
+  | RunSnapshot
+  | {
+      format: 'cabinlab.experiment';
+      schemaVersion: 1;
+      scenario: Scenario;
+      run: RunSnapshot;
+      verification: unknown;
+    };
+
+export function serializeEvidence(data: EvidenceDocument): string {
+  const run = 'run' in data ? data.run : data;
+  if (!evidenceSchema.safeParse(run).success)
+    throw new Error('当前运行超出证据复核限制，无法导出可复核证据。');
+  if ('run' in data && canonical(data.scenario) !== canonical(run.scenario))
+    throw new Error('当前场景与运行证据不一致，请单独导出运行证据。');
+  const text = JSON.stringify(data);
+  if (new TextEncoder().encode(text).byteLength > evidenceMaxBytes)
+    throw new Error('证据文件超过 1 MB 限制。完整实验可改为单独导出运行证据。');
+  return text;
 }
 
 export function inspectEvidence(text: string): { source: RunSnapshot; replayed: RunSnapshot } {

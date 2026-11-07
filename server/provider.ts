@@ -50,6 +50,10 @@ export type ProviderConfig = {
   openaiFallback?: { apiKey: string; model: string };
 };
 
+const defaultAttemptTimeout = 30_000;
+const compileTimeLimit = 120_000;
+const modelTextLimit = 30_000;
+
 async function readBoundedResponse(
   response: Response,
   signal: AbortSignal,
@@ -145,10 +149,30 @@ export async function compile(
         label: 'OpenAI 备用模型',
       });
   }
+  const deadlineAt = performance.now() + compileTimeLimit;
   for (const [index, attempt] of attempts.entries()) {
     if (signal?.aborted) throw new CompileError('cancelled', '生成已取消。', 499);
+    const remaining = Math.floor(deadlineAt - performance.now());
+    if (remaining < 1)
+      throw new CompileError('provider_timeout', '生成已达到总时限，请缩短需求后重试。', 504);
+    const reserved = attempts
+      .slice(index + 1)
+      .reduce(
+        (total, next) =>
+          total + Math.min(next.config.timeoutMs ?? defaultAttemptTimeout, defaultAttemptTimeout),
+        0,
+      );
+    const timeoutMs = Math.min(
+      attempt.config.timeoutMs ?? defaultAttemptTimeout,
+      Math.max(1, remaining - reserved),
+    );
     try {
-      const result = await compileWithProvider(request, attempt.config, fetcher, signal);
+      const result = await compileWithProvider(
+        request,
+        { ...attempt.config, timeoutMs },
+        fetcher,
+        signal,
+      );
       if (attempt.label) result.message += ` 已使用${attempt.label}。`;
       return result;
     } catch (error) {
@@ -174,15 +198,16 @@ async function compileWithProvider(
   config: ProviderConfig,
   fetcher: typeof fetch,
   signal?: AbortSignal,
-  repairAttempt = false,
+  repairDeadline?: AbortSignal,
 ): Promise<CompileResult> {
   const { prompt, intent, baseScenario } = compileRequestSchema.parse(request);
   if (config.provider === 'demo')
     return intent === 'modify' && baseScenario
       ? modifyDemo(prompt, baseScenario)
       : compileDemo(prompt);
-  const timeoutMs = config.timeoutMs ?? 30000;
-  const deadline = AbortSignal.timeout(timeoutMs);
+  const timeoutMs = config.timeoutMs ?? defaultAttemptTimeout;
+  const deadline = repairDeadline ?? AbortSignal.timeout(timeoutMs);
+  const repairAttempt = repairDeadline !== undefined;
   const combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
   let system = baseScenario
     ? `修改 baseScenario，仅输出 {"patch":{需要改变的字段}}，不要 Markdown、分析或复制未改字段。patch 仅可含 trigger、actions、timeoutSeconds、reminder；修改提醒时返回完整 reminder，保留 kind。trigger 部分合并，actions 若修改必须返回完整数组并保留未要求改变的动作及顺序。名称、说明、归属等由服务器原样保留；不输出这些字段。${scenarioSchema.shape.trigger.shape.holdSeconds.description}${scenarioSchema.shape.timeoutSeconds.description}例如“持续时间改为8秒”应输出 {"patch":{"trigger":{"holdSeconds":8}}}，不要修改 timeoutSeconds。超出能力范围、需求不明确或要求修改其他字段时，只返回 {"clarification":"需确认的信息"}；不忽略需求，不夹紧数值。温控、风量、循环动作前必须明确开启空调。信号范围：${JSON.stringify(Object.fromEntries(Object.entries(signalLabels).map(([key, value]) => [key, [value.min, value.max]])))}。动作参数范围：${JSON.stringify(Object.fromEntries(Object.entries(catalog).map(([key, value]) => [key, value.range])))}。`
@@ -285,7 +310,7 @@ async function compileWithProvider(
               stop_reason: z.literal('end_turn'),
               content: z.array(
                 z.discriminatedUnion('type', [
-                  z.object({ type: z.literal('text'), text: z.string().max(30000) }),
+                  z.object({ type: z.literal('text'), text: z.string().max(modelTextLimit) }),
                   z.object({ type: z.literal('thinking') }),
                   z.object({ type: z.literal('redacted_thinking') }),
                 ]),
@@ -298,10 +323,21 @@ async function compileWithProvider(
         : z
             .object({
               choices: z
-                .array(z.object({ message: z.object({ content: z.string().max(30000) }) }))
+                .array(
+                  z.object({
+                    finish_reason: z.literal('stop').optional(),
+                    message: z.object({
+                      content: z.string().max(modelTextLimit),
+                      tool_calls: z.array(z.unknown()).length(0).nullish(),
+                      function_call: z.null().optional(),
+                      refusal: z.null().optional(),
+                    }),
+                  }),
+                )
                 .min(1),
             })
             .parse(JSON.parse(raw)).choices[0].message.content;
+      if (text.length > modelTextLimit) throw new Error('模型文本总长度超过限制');
     } catch (error) {
       if (error instanceof CompileError) throw error;
       throw new CompileError(
@@ -331,7 +367,7 @@ async function compileWithProvider(
     } catch (error) {
       if (error instanceof CompileError) throw error;
       if (!repairAttempt && !combined.aborted)
-        return await compileWithProvider(request, config, fetcher, combined, true);
+        return await compileWithProvider(request, config, fetcher, signal, deadline);
       throw new CompileError(
         'provider_output',
         '模型返回的场景不符合格式或能力约束，已阻止加载。请调整需求后重试。',

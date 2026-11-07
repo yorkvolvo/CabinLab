@@ -103,7 +103,11 @@ export const runtimeVersionSchema = z.enum([
   '1.6.0',
   '1.7.0',
   '1.8.0',
+  '1.9.0',
 ]);
+export const runTimeLimit = 3600;
+export const runCommandLimit = 1000;
+export const runEventLimit = 4096;
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
   | 'armed'
@@ -315,7 +319,7 @@ export class CabinRuntime {
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.8.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.9.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -368,7 +372,7 @@ export class CabinRuntime {
     if (!this.supportsExitSettings && this.restoresSettings)
       throw new Error('旧运行时不支持退出恢复');
     if (
-      runtimeVersion !== '1.8.0' &&
+      !this.supportsAppointments &&
       (['elapsedSeconds', 'driverLeft', 'homeDistance'].includes(this.scenario.trigger.signal) ||
         this.vehicle.driverHeat !== undefined ||
         this.vehicle.homeDistance !== undefined ||
@@ -427,7 +431,11 @@ export class CabinRuntime {
   }
 
   private get supportsExitSettings(): boolean {
-    return this.runtimeVersion === '1.7.0' || this.runtimeVersion === '1.8.0';
+    return this.runtimeVersion === '1.7.0' || this.supportsAppointments;
+  }
+
+  private get supportsAppointments(): boolean {
+    return this.runtimeVersion === '1.8.0' || this.runtimeVersion === '1.9.0';
   }
 
   private get restoresSettings(): boolean {
@@ -769,12 +777,20 @@ export class CabinRuntime {
     }
   }
 
-  step(seconds = 1) {
+  private tick(seconds: number) {
     if (!Number.isInteger(seconds) || seconds < 1 || seconds > 600)
       throw new Error('单次推进范围为 1–600 秒');
     for (let i = 0; i < seconds && !isTerminal(this.status); i++) {
       this.time++;
       this.evaluate();
+      if (
+        this.runtimeVersion === '1.9.0' &&
+        this.time >= runTimeLimit &&
+        !isTerminal(this.status)
+      ) {
+        this.stop('已达到证据记录时长上限，请导出运行证据');
+        break;
+      }
       if (this.status !== 'executing' || !this.pending) continue;
       const { action, acceptedAt } = this.pending;
       const elapsed = this.time - acceptedAt;
@@ -798,35 +814,59 @@ export class CabinRuntime {
       this.pending = undefined;
       this.nextAction();
     }
+  }
+
+  step(seconds = 1) {
+    this.tick(seconds);
     return this.snapshot();
+  }
+
+  private moveTo(target: number) {
+    if (!Number.isInteger(target) || target < 0 || target > this.time + runTimeLimit)
+      throw new Error('目标虚拟时间不合法');
+    while (this.time < target && !isTerminal(this.status))
+      this.tick(Math.min(600, target - this.time));
   }
 
   advanceTo(target: number) {
-    if (!Number.isInteger(target) || target < 0 || target > this.time + 3600)
-      throw new Error('目标虚拟时间不合法');
-    while (this.time < target && !isTerminal(this.status))
-      this.step(Math.min(600, target - this.time));
+    this.moveTo(target);
     return this.snapshot();
   }
 
-  setSignals(patch: z.infer<typeof signalsSchema>) {
+  private get commandLimitReached(): boolean {
+    return this.runtimeVersion === '1.9.0' && this.commands.length >= runCommandLimit;
+  }
+
+  private stopAtCommandLimit() {
+    if (this.commandLimitReached && !isTerminal(this.status))
+      this.stop('已达到证据输入记录上限，请导出运行证据');
+  }
+
+  private applySignals(patch: z.infer<typeof signalsSchema>) {
+    if (this.commandLimitReached) return;
     const allowed = signalsSchema.parse(patch);
     if (
       (!this.supportsReminders && reminderVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsRainPickup && rainPickupVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsDepartureWindow && departureWindowKeys.some((key) => key in allowed)) ||
       (!this.supportsPetMirror && 'petPresent' in allowed) ||
-      (this.runtimeVersion !== '1.8.0' && 'homeDistance' in allowed)
+      (!this.supportsAppointments && 'homeDistance' in allowed)
     )
       throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
     this.vehicle = vehicleSchema.parse({ ...this.vehicle, ...allowed });
     this.log('input', `信号变化：${JSON.stringify(allowed)}`);
     this.evaluate();
+    this.stopAtCommandLimit();
+  }
+
+  setSignals(patch: z.infer<typeof signalsSchema>) {
+    this.applySignals(patch);
     return this.snapshot();
   }
 
-  manual(action: Action) {
+  private applyManual(action: Action) {
+    if (this.commandLimitReached) return;
     if (this.scenario.reminder?.kind === 'message') throw new Error('提醒场景不执行车辆动作');
     const validated = validateScenario({
       ...this.scenario,
@@ -853,7 +893,7 @@ export class CabinRuntime {
       throw new Error('当前运行时或停车条件不允许操作后视镜加热');
     if (
       action.capability === 'seat.heat' &&
-      (this.runtimeVersion !== '1.8.0' || !isParked(this.vehicle))
+      (!this.supportsAppointments || !isParked(this.vehicle))
     )
       throw new Error('必须停车才允许座椅预热');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
@@ -877,11 +917,16 @@ export class CabinRuntime {
       this.scenario.reminder?.kind === 'pet'
     )
       this.checkReminder();
+    this.stopAtCommandLimit();
+  }
+
+  manual(action: Action) {
+    this.applyManual(action);
     return this.snapshot();
   }
 
-  cancel() {
-    if (isTerminal(this.status)) return this.snapshot();
+  private cancelRun() {
+    if (isTerminal(this.status)) return;
     this.commands.push({ time: this.time, type: 'cancel' });
     if (this.pending)
       this.log('cancelled', '停止预演，取消在途请求', this.pending.action.capability);
@@ -893,6 +938,10 @@ export class CabinRuntime {
       'cancelled',
       this.restoresSettings ? '用户停止了本次运行' : '用户停止了本次运行；已完成的设备动作不回滚',
     );
+  }
+
+  cancel() {
+    this.cancelRun();
     return this.snapshot();
   }
 
@@ -927,22 +976,24 @@ export class CabinRuntime {
       caveat: '仅表示当前虚拟车辆模型中的状态回读，不构成真车验收或安全认证。',
     });
   }
+
+  static fromEvidence(evidence: RunEvidence): CabinRuntime {
+    const runtime = new CabinRuntime(
+      evidence.scenario,
+      evidence.initialState,
+      evidence.fault,
+      `${evidence.runId}-replay`,
+      evidence.runtimeVersion,
+    );
+    for (const command of evidence.commands) {
+      runtime.moveTo(command.time);
+      if (command.type === 'signals') runtime.applySignals(command.patch);
+      if (command.type === 'manual') runtime.applyManual(command.action);
+      if (command.type === 'cancel') runtime.cancelRun();
+    }
+    runtime.moveTo(evidence.time);
+    return runtime;
+  }
 }
 
-export function replayEvidence(evidence: RunEvidence): CabinRuntime {
-  const runtime = new CabinRuntime(
-    evidence.scenario,
-    evidence.initialState,
-    evidence.fault,
-    `${evidence.runId}-replay`,
-    evidence.runtimeVersion,
-  );
-  for (const command of evidence.commands) {
-    runtime.advanceTo(command.time);
-    if (command.type === 'signals') runtime.setSignals(command.patch);
-    if (command.type === 'manual') runtime.manual(command.action);
-    if (command.type === 'cancel') runtime.cancel();
-  }
-  runtime.advanceTo(evidence.time);
-  return runtime;
-}
+export const replayEvidence = CabinRuntime.fromEvidence;

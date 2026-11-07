@@ -58,6 +58,8 @@ import {
   previewVehicle,
   isTerminal,
   replayEvidence,
+  runCommandLimit,
+  runTimeLimit,
   runStatusLabels as statusLabels,
   type Fault,
   type RunSnapshot,
@@ -68,7 +70,15 @@ import Cabin from './components/Cabin';
 import Verification from './components/Verification';
 import VersionComparison, { ScenarioDiff } from './components/VersionComparison';
 import EvidenceInspector from './components/EvidenceInspector';
-import { downloadJson, readVersions, storageKey } from './storage';
+import {
+  downloadJson,
+  downloadText,
+  latestVersion,
+  readVersions,
+  saveVersion,
+  storageKey,
+} from './storage';
+import { serializeEvidence } from './domain/evidence';
 
 const icons = {
   rest: Moon,
@@ -120,6 +130,7 @@ export default function App() {
     () => versions.filter((s) => s.templateId === 'rest').at(-1) ?? cloneTemplate('rest'),
   );
   const [draft, setDraft] = useState<Scenario | null>(null);
+  const [saving, setSaving] = useState(false);
   const [prompt, setPrompt] = useState(templates[selected.templateId].sourcePrompt);
   const [compileMessage, setCompileMessage] = useState('');
   const [compileIntent, setCompileIntent] = useState<'create' | 'modify'>('create');
@@ -141,6 +152,9 @@ export default function App() {
   const timeline = useRef<HTMLDivElement | null>(null);
   const compileAbort = useRef<AbortController | null>(null);
   const requestId = useRef(0);
+  const draftVersion = useRef(0);
+  const draftRevision = useRef(0);
+  const savingDraft = useRef(false);
   const reminderAudio = useRef<AudioContext | null>(null);
   const playedReminder = useRef('');
   const scenario = draft ?? selected;
@@ -184,12 +198,12 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(versions));
-    } catch {
-      setToast('浏览器存储不可用，版本仍保留在本次会话中；请导出场景。');
-    }
-  }, [versions]);
+    const refreshVersions = (event: StorageEvent) => {
+      if (event.key === storageKey || event.key === null) setVersions(readVersions());
+    };
+    window.addEventListener('storage', refreshVersions);
+    return () => window.removeEventListener('storage', refreshVersions);
+  }, []);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(''), 5000);
@@ -288,6 +302,7 @@ export default function App() {
     setReport(null);
   }
   function selectScenario(next: Scenario) {
+    draftRevision.current++;
     requestId.current++;
     compileAbort.current?.abort();
     compileAbort.current = null;
@@ -303,12 +318,11 @@ export default function App() {
     setTab('workbench');
   }
   function editScenario(patch: Partial<Scenario>) {
+    if (savingDraft.current) return;
     if (compileAbort.current) cancelCompile();
-    if (active) {
-      runtime.current?.cancel();
-      setPlaying(false);
-      setSnapshot(runtime.current?.snapshot() ?? null);
-    }
+    if (active) stop();
+    if (!draft) draftVersion.current = latestVersion(versions, scenario.templateId);
+    draftRevision.current++;
     setDraft({ ...structuredClone(scenario), ...patch, confirmed: false });
     setReport(null);
   }
@@ -338,7 +352,9 @@ export default function App() {
       if (id !== requestId.current) return;
       const parsed = validateScenario(data.draft);
       if (!parsed.scenario) throw new Error('返回的场景结构不合法，已阻止加载');
-      haltAndReset(parsed.scenario);
+      stop();
+      draftVersion.current = latestVersion(versions, parsed.scenario.templateId);
+      draftRevision.current++;
       setDraft({ ...parsed.scenario, confirmed: false });
       setCompileMessage(data.message);
       setProviderMode(data.mode);
@@ -369,6 +385,7 @@ export default function App() {
     setCompileMessage('');
   }
   function newRequest() {
+    draftRevision.current++;
     cancelCompile();
     haltAndReset();
     setTab('workbench');
@@ -379,30 +396,32 @@ export default function App() {
       '选择停车休息、阅读或空气清新需求。本地模板只提供已知示例建议；明确数值请使用“修改当前场景”。',
     );
   }
-  function confirmDraft() {
-    if (!draft) return;
+  async function confirmDraft() {
+    if (!draft || savingDraft.current) return;
     const parsed = validateScenario(draft);
     if (!parsed.scenario) {
       setToast(parsed.errors.join('；'));
       return;
     }
-    const matching = versions.filter((s) => s.templateId === draft.templateId);
-    const version = Math.max(0, ...matching.map((s) => s.version)) + 1;
-    if (version > 999) {
-      setToast('版本数已达到上限，请导出后整理本地数据。');
-      return;
+    savingDraft.current = true;
+    setSaving(true);
+    const revision = draftRevision.current;
+    try {
+      const saved = await saveVersion(parsed.scenario, draftVersion.current);
+      setVersions(readVersions());
+      if (revision !== draftRevision.current) return;
+      haltAndReset(saved);
+      setSelected(saved);
+      setDraft(null);
+      setFault('none');
+      setToast(`v${saved.version} 已确认并保存到本地`);
+    } catch (error) {
+      if (revision === draftRevision.current)
+        setToast(error instanceof Error ? error.message : '版本保存失败，草案仍可导出。');
+    } finally {
+      savingDraft.current = false;
+      setSaving(false);
     }
-    const next = { ...parsed.scenario, id: draft.templateId, version, confirmed: true };
-    setVersions((prev) => [
-      ...prev.filter((s) => s.templateId !== draft.templateId),
-      ...matching.slice(-29),
-      next,
-    ]);
-    haltAndReset(next);
-    setSelected(next);
-    setDraft(null);
-    setFault('none');
-    setToast(`v${version} 已确认并保存到本地`);
   }
   function start() {
     if (draft) {
@@ -469,6 +488,7 @@ export default function App() {
     setToast('已按原始状态、故障和输入轨迹重放，执行证据可复现。');
   }
   function changeSignals(patch: Parameters<CabinRuntime['setSignals']>[0]) {
+    if (savingDraft.current) return;
     if (runtime.current && active) {
       const next = runtime.current.setSignals(patch);
       setSnapshot(next);
@@ -513,6 +533,14 @@ export default function App() {
     const actions = structuredClone(scenario.actions);
     actions[index] = { ...actions[index], value } as Action;
     editScenario({ actions });
+  }
+
+  function exportEvidence(name: string, data: Parameters<typeof serializeEvidence>[0]) {
+    try {
+      downloadText(name, serializeEvidence(data));
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '证据导出失败。');
+    }
   }
 
   return (
@@ -687,15 +715,17 @@ export default function App() {
             </div>
             <button
               className="button secondary export-top"
-              onClick={() =>
-                downloadJson(`cabinlab-${selected.id}-v${selected.version}.json`, {
+              onClick={() => {
+                const name = `cabinlab-${selected.id}-v${selected.version}.json`;
+                const experiment = {
                   format: 'cabinlab.experiment',
                   schemaVersion: 1,
                   scenario: selected,
-                  run: snapshot,
                   verification: report,
-                })
-              }
+                } as const;
+                if (snapshot) exportEvidence(name, { ...experiment, run: snapshot });
+                else downloadJson(name, { ...experiment, run: null });
+              }}
             >
               <Download size={14} />
               导出实验
@@ -1194,15 +1224,16 @@ export default function App() {
                         )}
                         <button
                           className="button primary"
-                          disabled={draftErrors.length > 0}
+                          disabled={draftErrors.length > 0 || saving}
                           onClick={confirmDraft}
                         >
                           <Check size={14} />
-                          确认参数并保存版本
+                          {saving ? '正在保存…' : '确认参数并保存版本'}
                         </button>
                         <button
                           className="text-button"
                           onClick={() => {
+                            draftRevision.current++;
                             setDraft(null);
                             setCompileMessage('');
                           }}
@@ -1655,7 +1686,7 @@ export default function App() {
                           aria-label="导出运行证据"
                           onClick={() =>
                             snapshot &&
-                            downloadJson(
+                            exportEvidence(
                               `cabinlab-run-v${snapshot.scenario.version}.json`,
                               snapshot,
                             )
@@ -1665,6 +1696,14 @@ export default function App() {
                         </button>
                       </div>
                     </div>
+                    {snapshot &&
+                      active &&
+                      (snapshot.time >= runTimeLimit - 60 ||
+                        snapshot.commands.length >= runCommandLimit - 50) && (
+                        <p className="small muted" role="status">
+                          证据接近记录上限，请及时导出。
+                        </p>
+                      )}
                     <div className="timeline-content" ref={timeline}>
                       {snapshot ? (
                         snapshot.events.map((event) => (

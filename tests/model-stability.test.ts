@@ -62,6 +62,65 @@ test('网关备用模型可用时不调用 OpenAI', async () => {
   assert.match(result.message, /网关备用模型/);
 });
 
+test('两次网关超时仍为最后一个备用模型预留时间，总预算为 120 秒', async (t) => {
+  let time = 0;
+  let deadline = new AbortController();
+  const attempts: number[] = [];
+  t.mock.method(performance, 'now', () => time);
+  t.mock.method(AbortSignal, 'timeout', (ms: number) => {
+    deadline = new AbortController();
+    attempts.push(ms);
+    return deadline.signal;
+  });
+  const config = configFromEnv({ ...fallbackEnv, LLM_TIMEOUT_MS: '120000' });
+  const result = await compile(fallbackRequest, config, async (_url, init) => {
+    const { model } = JSON.parse(String(init?.body));
+    if (model !== 'gpt-5-mini') {
+      time += attempts.at(-1)!;
+      deadline.abort();
+      init?.signal?.throwIfAborted();
+    }
+    return Response.json({
+      choices: [
+        { finish_reason: 'stop', message: { content: JSON.stringify(cloneTemplate('rest')) } },
+      ],
+    });
+  });
+  assert.deepEqual(attempts, [60000, 30000, 30000]);
+  assert.match(result.message, /OpenAI 备用模型/);
+});
+
+test('两种协议均拒绝非正常终态、工具调用或合并后过长的模型文本', async () => {
+  const scenario = JSON.stringify(cloneTemplate('rest'));
+  const model = {
+    provider: 'openai-compatible',
+    baseUrl: 'https://example.test',
+    model: 'fixture',
+    apiKey: 'test',
+  } as const;
+  for (const choice of [
+    ...['length', 'tool_calls', 'content_filter'].map((finish_reason) => ({
+      finish_reason,
+      message: { content: scenario },
+    })),
+    { finish_reason: 'stop', message: { content: scenario, tool_calls: [{}] } },
+  ])
+    await assert.rejects(
+      compile(fallbackRequest, model, async () => Response.json({ choices: [choice] })),
+      { code: 'provider_output' },
+    );
+  const content = [
+    { type: 'text', text: scenario + ' '.repeat(17000) },
+    { type: 'text', text: ' '.repeat(17000) },
+  ];
+  await assert.rejects(
+    compile(fallbackRequest, { ...model, provider: 'anthropic' }, async () =>
+      Response.json({ stop_reason: 'end_turn', content }),
+    ),
+    { code: 'provider_output' },
+  );
+});
+
 test('主模型超时后，备用请求使用自己的截止时间', async (t) => {
   const deadline = new AbortController();
   let timers = 0;

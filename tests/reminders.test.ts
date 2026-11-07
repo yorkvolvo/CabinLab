@@ -3,12 +3,42 @@ import assert from 'node:assert/strict';
 import { CabinRuntime, previewVehicle } from '../src/domain/runtime';
 import { cloneTemplate } from '../src/domain/templates';
 import { parseModelModification, modifyDemo } from '../src/domain/compiler';
-import { inspectEvidence } from '../src/domain/evidence';
+import { evidenceMaxBytes, inspectEvidence, serializeEvidence } from '../src/domain/evidence';
 import { scenarioChanges } from '../src/domain/comparison';
 import { validateScenario } from '../src/domain/scenario';
 
 const nap = () => cloneTemplate('nap');
 const charge = () => cloneTemplate('charging');
+
+test('监测在时长和输入上限结束，导出证据仍能独立重放', () => {
+  const scene = cloneTemplate('petWait');
+  const vehicle = { ...previewVehicle(scene), petPresent: true };
+  const clock = new CabinRuntime(scene, vehicle);
+  assert.equal(clock.advanceTo(3599).status, 'waiting');
+  const timed = clock.step(10);
+  assert.equal(timed.time, 3600);
+  assert.equal(timed.status, 'stopped');
+  assert.equal(inspectEvidence(serializeEvidence(timed)).replayed.time, 3600);
+
+  const inputs = new CabinRuntime(scene, vehicle);
+  for (let i = 0; i < 1000; i++) inputs.setSignals({ temperature: 26 + (i % 2) });
+  const capped = inputs.setSignals({ temperature: 35 });
+  assert.equal(capped.commands.length, 1000);
+  assert.equal(capped.status, 'stopped');
+  assert.equal(capped.vehicle.temperature, 27);
+  assert.equal(inspectEvidence(serializeEvidence(capped)).replayed.commands.length, 1000);
+  assert.throws(
+    () =>
+      serializeEvidence({
+        format: 'cabinlab.experiment',
+        schemaVersion: 1,
+        scenario: scene,
+        run: capped,
+        verification: 'x'.repeat(evidenceMaxBytes),
+      }),
+    /超过 1 MB/,
+  );
+});
 
 test('到家提醒的行驶豁免不能被用于车辆动作', () => {
   const scene = cloneTemplate('homeReminder');

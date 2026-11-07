@@ -41,20 +41,26 @@ test('多个场景族可保存超过旧版 90 条的历史，未确认与非法�
   });
 });
 
-test('午休和充电等候保留旧版并追加恢复版，重新加载不重复追加', () => {
-  const old = ['nap', 'charging'].map((family) => ({
-    ...cloneTemplate(family === 'nap' ? 'nap' : 'charging'),
-    version: 7,
+test('只有原始午休模板追加恢复版，用户选择保留现状时仍加载原策略', () => {
+  const old = {
+    ...cloneTemplate('nap'),
+    sourcePrompt:
+      '定时午休：停车且车内温度高于 28°C 持续 2 秒，依次执行：主驾有人才把主驾座椅后仰到 25°；开启空调；设目标温度为 24°C；播放自然白噪音。准备动作完成后 20 分钟唤醒，离座或驶离取消。',
     exit: 'cancel-pending-no-restore',
-  }));
-  withStoredVersions(old, () => {
+  };
+  withStoredVersions([old], () => {
     const versions = readVersions();
-    for (const previous of old) {
-      assert.deepEqual(
-        versions.filter((item) => item.templateId === previous.templateId),
-        [previous, { ...previous, version: 8, exit: 'cancel-pending-restore-settings' }],
-      );
-    }
+    assert.deepEqual(
+      versions.filter((item) => item.templateId === 'nap'),
+      [old, { ...cloneTemplate('nap'), version: 2 }],
+    );
     withStoredVersions(versions, () => assert.deepEqual(readVersions(), versions));
   });
+  const custom = { ...old, version: 2, sourcePrompt: '午休结束时保留设置' };
+  withStoredVersions([old, custom], () =>
+    assert.deepEqual(
+      readVersions().filter((scene) => scene.templateId === 'nap'),
+      [old, custom],
+    ),
+  );
 });

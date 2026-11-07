@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { FileCheck2, Upload, X } from 'lucide-react';
-import { evidenceMaxBytes, inspectEvidence } from '../domain/evidence';
-import { downloadJson } from '../storage';
+import { evidenceMaxBytes, inspectEvidence, serializeEvidence } from '../domain/evidence';
+import { downloadText } from '../storage';
 import { runStatusLabels } from '../domain/runtime';
 
 export default function EvidenceInspector() {
@@ -119,12 +119,16 @@ export default function EvidenceInspector() {
             </details>
             <button
               className="text-button"
-              onClick={() =>
-                downloadJson(
-                  `cabinlab-replayed-v${result.source.scenario.version}.json`,
-                  result.replayed,
-                )
-              }
+              onClick={() => {
+                try {
+                  downloadText(
+                    `cabinlab-replayed-v${result.source.scenario.version}.json`,
+                    serializeEvidence(result.replayed),
+                  );
+                } catch (error) {
+                  setError(error instanceof Error ? error.message : '证据导出失败。');
+                }
+              }}
             >
               导出复现证据
             </button>

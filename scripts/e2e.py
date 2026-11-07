@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.8.0"
+    assert unknown["runtimeVersion"] == "1.9.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -253,6 +253,17 @@ with sync_playwright() as p:
     page.get_by_role("button", name="停止预演", exact=True).click()
     expect(page.get_by_text("座椅角度：主驾 0°", exact=False)).to_be_visible()
     passed("定时午休准确唤醒并恢复座椅、空调和媒体，历史重放静音")
+
+    select_template("定时午休")
+    steps(6)
+    page.get_by_role("spinbutton", name="持续时间", exact=True).fill("3")
+    expect(page.get_by_text("座椅角度：主驾 0°", exact=False)).to_be_visible()
+    page.get_by_role("button", name="放弃本次修改", exact=True).click()
+    page.get_by_role("button", name="开始预演", exact=True).click()
+    page.get_by_role("button", name="暂停", exact=True).click()
+    restarted = export_run("run-after-discard.json")
+    assert restarted["initialState"]["driverRecline"] == 0
+    passed("编辑中断后同步恢复读数，放弃草案后新预演从恢复后的状态开始")
 
     select_template("充电等候")
     page.get_by_role("checkbox", name="已插枪充电").uncheck()
@@ -381,6 +392,7 @@ with sync_playwright() as p:
     page.get_by_role("button", name="生成修改草案", exact=True).click()
     expect(page.locator(".draft-diff")).to_contain_text("7 秒")
     page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    expect(page.get_by_label("场景版本", exact=True)).to_have_value("3")
     slider.fill("2")
     steps(8)
     expect(page.locator(".run-status")).to_contain_text("等待触发")
@@ -515,6 +527,39 @@ with sync_playwright() as p:
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
+
+    shared = browser.new_context()
+    left, right = shared.new_page(), shared.new_page()
+    for tab in (left, right):
+        tab.goto(BASE_URL)
+        expect(tab.get_by_text("本地模板模式", exact=True)).to_be_visible()
+
+    def edit_duration(tab, title, duration):
+        tab.locator(".scenario-nav").filter(has_text=title).click()
+        tab.get_by_role("spinbutton", name="持续时间", exact=True).fill(str(duration))
+
+    def save_draft(tab):
+        tab.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+
+    edit_duration(left, "静心阅读", 4)
+    edit_duration(right, "清新座舱", 6)
+    save_draft(left)
+    expect(left.get_by_label("场景版本", exact=True)).to_have_value("2")
+    save_draft(right)
+    expect(right.get_by_label("场景版本", exact=True)).to_have_value("2")
+    left.reload()
+    left.locator(".scenario-nav").filter(has_text="静心阅读").click()
+    expect(left.get_by_label("场景版本", exact=True)).to_have_value("2")
+    edit_duration(left, "静心阅读", 5)
+    edit_duration(right, "静心阅读", 6)
+    save_draft(left)
+    expect(left.get_by_label("场景版本", exact=True)).to_have_value("3")
+    save_draft(right)
+    expect(right.locator(".toast")).to_contain_text("此场景已有更新的版本")
+    expect(right.get_by_text("待确认草案", exact=True)).to_be_visible()
+    expect(right.get_by_role("spinbutton", name="持续时间", exact=True)).to_have_value("6")
+    shared.close()
+    passed("跨标签页保存合并不同场景，保存同一场景冲突时保留草案")
 
     select_template("午间休憩")
     pending_routes = []
