@@ -43,36 +43,39 @@ batch: for (const model of models) {
     for (const baseline of baselines) {
       let base: Scenario = structuredClone(baseline);
       for (const intent of ['create', 'modify'] as const) {
-        const numeric = base.actions.find((action) => typeof action.value === 'number')!;
-        const changed = Math.min(
-          Number(numeric.value) + 1,
-          numeric.capability === 'climate.fan'
-            ? 5
-            : numeric.capability === 'climate.temperature'
-              ? 30
-              : numeric.capability === 'ambient.light'
-                ? 100
-                : numeric.capability === 'seat.recline'
-                  ? 45
-                  : 60,
-        );
+        const numeric = base.actions.find((action) => typeof action.value === 'number');
+        const changed =
+          numeric &&
+          Math.min(
+            Number(numeric.value) + 1,
+            numeric.capability === 'climate.fan'
+              ? 5
+              : numeric.capability === 'climate.temperature'
+                ? 30
+                : numeric.capability === 'ambient.light'
+                  ? 100
+                  : numeric.capability === 'seat.recline'
+                    ? 45
+                    : 60,
+          );
         const expected = structuredClone(intent === 'create' ? baseline : base);
         if (intent === 'modify') {
           if (expected.reminder?.kind === 'wake') expected.reminder.afterSeconds += 60;
           else if (expected.reminder?.kind === 'charge') expected.reminder.atPercent += 5;
           else if (expected.templateId === 'pickup') expected.trigger.threshold += 20;
           else expected.trigger.holdSeconds += 2;
-          expected.actions.find((action) => action.capability === numeric.capability)!.value =
-            changed;
+          if (numeric && changed !== undefined)
+            expected.actions.find((action) => action.capability === numeric.capability)!.value =
+              changed;
+          if (expected.templateId === 'rainClose') expected.trigger.threshold = 2;
         }
         const prompt =
           intent === 'create'
             ? baseline.reminder ||
-              baseline.templateId === 'rainDefog' ||
-              baseline.templateId === 'pickup'
+              ['rainDefog', 'pickup', 'passengerWait', 'rainClose'].includes(baseline.templateId)
               ? baseline.sourcePrompt
               : `创建“${baseline.name}”。仅 P 挡且车速为 0，${signalLabels[baseline.trigger.signal].label}${baseline.trigger.operator === 'gt' ? '高于' : '低于'} ${baseline.trigger.threshold}${signalLabels[baseline.trigger.signal].unit}连续 ${baseline.trigger.holdSeconds} 秒，依次执行：${baseline.actions.map(actionLabel).join('；')}。开始行驶或触发条件失效时停止后续动作，不恢复旧值。`
-            : `只修改这两项：${expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}。其余字段、动作及顺序全部原样保留，不增删动作。`;
+            : `只修改这两项：${expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${numeric ? `${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}` : '模拟雨量等级的触发阈值改为 2 级，仍须高于阈值'}。其余字段、动作及顺序全部原样保留，不增删动作。`;
         const started = performance.now();
         let passed = false;
         let error: string | undefined;
@@ -218,8 +221,14 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
   const runtime = new CabinRuntime(scene, initial);
   if (!reminder) {
     const { signal, threshold, holdSeconds } = expected.trigger;
-    const boundary = new CabinRuntime(scene, { ...initial, [signal]: threshold });
-    assert.equal(boundary.step(holdSeconds + 1).status, 'armed');
+    if (signal === 'driverExit') {
+      assert.equal(runtime.setSignals({ driverDoorOpen: true }).status, 'armed');
+      assert.equal(runtime.setSignals({ driverOccupied: false }).status, 'armed');
+      assert.equal(runtime.setSignals({ driverDoorOpen: false }).status, 'armed');
+    } else {
+      const boundary = new CabinRuntime(scene, { ...initial, [signal]: threshold });
+      assert.equal(boundary.step(holdSeconds + 1).status, 'armed');
+    }
     const complete = runtime.advanceTo(readyAt);
     assert.equal(complete.status, 'completed');
     assert.deepEqual(
@@ -238,12 +247,20 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
         expected.actions.find((action) => action.capability === 'climate.fan')?.value,
       );
     }
-    if (expected.templateId === 'pickup') {
+    if (expected.templateId === 'pickup' || expected.templateId === 'passengerWait') {
       assert.equal(
         complete.vehicle.targetTemperature,
         expected.actions.find((action) => action.capability === 'climate.temperature')?.value,
       );
       assert.equal(complete.vehicle.playing, false);
+    }
+    if (expected.templateId === 'rainClose') {
+      assert.equal(complete.vehicle.windowsClosed, true);
+      const blocked = new CabinRuntime(scene, { ...initial, windowPathClear: false }).advanceTo(
+        readyAt,
+      );
+      assert.equal(blocked.vehicle.windowsClosed, false);
+      assert.ok(!blocked.events.some((event) => event.kind === 'accepted'));
     }
     assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
     return { status: complete.status, confirmedActions: expected.actions.length };

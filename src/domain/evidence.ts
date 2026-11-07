@@ -77,7 +77,7 @@ const evidenceSchema = z
     caveat: z.string().max(500),
     progress: z.number().min(0).max(1),
     holdElapsed: timeSchema,
-    locked: z.array(resourceSchema).max(4),
+    locked: z.array(resourceSchema).max(resourceSchema.options.length),
     pending: capabilitySchema.optional(),
     reminderDueAt: timeSchema.optional(),
   })

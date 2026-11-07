@@ -17,6 +17,11 @@ for (const id of Object.keys(templates) as TemplateId[]) {
   const initial = previewVehicle(scenario);
   const capability = scenario.actions[0].capability;
   const finish = (runtime: CabinRuntime) => {
+    if (id === 'passengerWait') {
+      runtime.setSignals({ driverDoorOpen: true });
+      runtime.setSignals({ driverOccupied: false });
+      runtime.setSignals({ driverDoorOpen: false });
+    }
     const snapshot = runtime.step(90);
     if (snapshot.reminderDueAt !== undefined) return runtime.advanceTo(snapshot.reminderDueAt);
     if (scenario.reminder?.kind === 'charge')
@@ -47,7 +52,7 @@ for (const id of Object.keys(templates) as TemplateId[]) {
     assert.equal(unknown.length, 1);
     assert.equal(accepted.length, 1);
     assert.equal(unknown[0].time - accepted[0].time, scenario.timeoutSeconds);
-    assert.deepEqual(unknown[0].state, initial);
+    assert.deepEqual(unknown[0].state, accepted[0].state);
     assert.equal(
       result.events.some(
         (event) =>
@@ -59,6 +64,21 @@ for (const id of Object.keys(templates) as TemplateId[]) {
     assert.deepEqual(runtime.step(90), result);
   });
 }
+
+test('关窗前或在途无法确认窗路安全时，不产生全闭回读且结果可重放', () => {
+  const scenario = cloneTemplate('rainClose');
+  const initial = previewVehicle(scenario);
+  const blocked = new CabinRuntime(scenario, { ...initial, windowPathClear: undefined }).step(20);
+  assert.ok(blocked.events.some((event) => event.kind === 'blocked'));
+  assert.ok(!blocked.events.some((event) => event.kind === 'accepted'));
+  const pending = new CabinRuntime(scenario, initial);
+  assert.equal(pending.step(5).pending, 'window.close');
+  pending.setSignals({ windowPathClear: false });
+  const result = pending.step(20);
+  assert.equal(result.status, 'partial');
+  assert.equal(result.vehicle.windowsClosed, false);
+  assert.equal(inspectEvidence(JSON.stringify(result)).replayed.vehicle.windowsClosed, false);
+});
 
 test('前挡除雾要求空调成功开启，旧运行时不会接受新能力或信号', () => {
   const scenario = cloneTemplate('rainDefog');

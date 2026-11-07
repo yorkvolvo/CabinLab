@@ -14,6 +14,7 @@ export const actionSchema = z.discriminatedUnion('capability', [
     .object({ capability: z.literal('media.play'), value: z.enum(['轻音乐', '自然白噪音']) })
     .strict(),
   z.object({ capability: z.literal('media.pause'), value: z.literal(true) }).strict(),
+  z.object({ capability: z.literal('window.close'), value: z.literal(true) }).strict(),
   z
     .object({ capability: z.literal('media.volume'), value: z.number().int().min(0).max(60) })
     .strict(),
@@ -47,6 +48,8 @@ export const scenarioSchema = z
       'charging',
       'rainDefog',
       'pickup',
+      'passengerWait',
+      'rainClose',
     ]),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
@@ -62,6 +65,7 @@ export const scenarioSchema = z
           'batteryPercent',
           'rainLevel',
           'pickupDistance',
+          'driverExit',
         ]),
         operator: z.enum(['gt', 'lt']),
         threshold: z.number().min(-50).max(10000),
@@ -92,7 +96,7 @@ export const scenarioSchema = z
 export type Scenario = z.infer<typeof scenarioSchema>;
 export type Action = z.infer<typeof actionSchema>;
 export type Capability = Action['capability'];
-export const resourceSchema = z.enum(['climate', 'media', 'ambient', 'seat']);
+export const resourceSchema = z.enum(['climate', 'media', 'ambient', 'seat', 'window']);
 export type Resource = z.infer<typeof resourceSchema>;
 export type TemplateId = Scenario['templateId'];
 
@@ -187,6 +191,14 @@ export const catalog: Record<
     result: '模拟座椅后仰角度回读',
     boundary: '只模拟前排座椅；角度不代表实车行程或防夹能力。',
   },
+  'window.close': {
+    label: '关闭四门车窗',
+    unit: '',
+    range: '关闭',
+    precondition: 'P 挡、车速为 0 且确认窗路无障碍',
+    result: '四门车窗全闭回读',
+    boundary: '模拟四窗合并反馈，窗路信号用于预演阻止关闭。',
+  },
 };
 
 export const signalLabels = {
@@ -196,6 +208,7 @@ export const signalLabels = {
   batteryPercent: { label: '电池电量', unit: '%', min: 0, max: 100 },
   rainLevel: { label: '模拟雨量等级', unit: '级', min: 0, max: 3 },
   pickupDistance: { label: '距接娃点（模拟）', unit: 'm', min: 0, max: 500 },
+  driverExit: { label: '主驾离车且仍有乘客', unit: '', min: 0, max: 1 },
 };
 
 export const seatLabels = { driver: '主驾', passenger: '副驾' };
@@ -216,8 +229,8 @@ export function actionLabel(action: Action): string {
         ? '开启'
         : '关闭'
       : `${action.value}${catalog[action.capability].unit}`;
-  return action.capability === 'media.pause'
-    ? '暂停媒体'
+  return action.capability === 'media.pause' || action.capability === 'window.close'
+    ? catalog[action.capability].label
     : `${catalog[action.capability].label} · ${value}`;
 }
 
@@ -258,6 +271,21 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
     errors.push('雨天除雾的触发条件必须为模拟雨量等级高于阈值');
   if (scenario.templateId === 'pickup' && (signal !== 'pickupDistance' || operator !== 'lt'))
     errors.push('接娃等候的触发条件必须为模拟距离低于阈值');
+  if (
+    (scenario.templateId === 'passengerWait' || signal === 'driverExit') &&
+    (scenario.templateId !== 'passengerWait' ||
+      signal !== 'driverExit' ||
+      operator !== 'gt' ||
+      threshold !== 0)
+  )
+    errors.push('乘客等候必须使用主驾离车且仍有乘客的触发条件');
+  if (scenario.templateId === 'rainClose' && (signal !== 'rainLevel' || operator !== 'gt'))
+    errors.push('雨天自动关窗必须使用模拟雨量等级高于阈值');
+  if (
+    (scenario.templateId === 'passengerWait' || scenario.templateId === 'rainClose') &&
+    scenario.reminder
+  )
+    errors.push('该场景使用原触发条件退出，不支持附加提醒');
   if (signal === 'rainLevel' && !Number.isInteger(threshold))
     errors.push('模拟雨量等级阈值必须是整数');
   const bounds = signalLabels[signal];

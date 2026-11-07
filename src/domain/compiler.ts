@@ -79,12 +79,17 @@ export function assumptionsFor(scenario: Scenario): string[] {
   const { signal, operator, threshold, holdSeconds } = scenario.trigger;
   return [
     '停车定义为 P 挡且车速为 0；任何动作前和状态回读前都会重新检查。',
-    `${signalLabels[signal].label}${operator === 'gt' ? '高于' : '低于'} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
+    signal === 'driverExit'
+      ? `观察到主驾在座、开门离座并关门，副驾或后排仍明确有人，持续 ${holdSeconds} 秒后开始。`
+      : `${signalLabels[signal].label}${operator === 'gt' ? '高于' : '低于'} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
     scenario.reminder
       ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。退出不回滚。`
       : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
     ...(scenario.actions.some((action) => action.capability === 'seat.recline')
       ? ['对应座位需明确有人，座椅请求与回读前都会检查占用。']
+      : []),
+    ...(scenario.actions.some((action) => action.capability === 'window.close')
+      ? ['请求与回读前均需确认窗路无障碍。']
       : []),
     `用户手动操作优先；每个动作 ${scenario.timeoutSeconds} 秒超时，失败后仅继续不依赖该动作的任务。`,
   ];
@@ -92,7 +97,7 @@ export function assumptionsFor(scenario: Scenario): string[] {
 
 export function compileDemo(prompt: string): CompileResult {
   const exact = Object.values(templates).find(
-    (template) => template.sourcePrompt === prompt.trim(),
+    (template) => template.sourcePrompt === prompt.trim() || template.name === prompt.trim(),
   );
   if (exact) return demoDraft(exact.templateId, prompt);
   const intent = prompt
@@ -108,10 +113,10 @@ export function compileDemo(prompt: string): CompileResult {
       'needs_clarification',
       '需求包含否定、取消或停止指令。本地模板不能可靠解释这些语义，未生成草案；请明确要保留的动作，或使用工作台的停止按钮。',
     );
-  if (/车窗|天窗|座椅|车门|后视镜|油门|刹车|制动|导航|雨刷|自动驾驶/.test(prompt))
+  if (/车窗|关窗|天窗|座椅|车门|后视镜|油门|刹车|制动|导航|雨刷|自动驾驶/.test(prompt))
     throw new CompileError(
       'unsupported_request',
-      '需求包含当前能力目录之外的操作。这里只支持停车时的空调、媒体和阅读灯，请移除未支持的部分后重试。',
+      '本地模式无法解析这些设备操作。请使用对应的内置示例，或移除能力目录之外的操作。',
     );
   if (/行驶时|开车时|驾驶时|D\s*挡时/.test(prompt))
     throw new CompileError(

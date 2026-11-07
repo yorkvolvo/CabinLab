@@ -38,6 +38,10 @@ export const vehicleSchema = z
     rainLevel: z.number().int().min(0).max(3).optional(),
     pickupDistance: z.number().min(0).max(500).optional(),
     frontDefrost: z.boolean().optional(),
+    driverDoorOpen: z.boolean().optional(),
+    rearOccupied: z.boolean().optional(),
+    windowPathClear: z.boolean().optional(),
+    windowsClosed: z.boolean().optional(),
   })
   .strict();
 export type Vehicle = z.infer<typeof vehicleSchema>;
@@ -54,6 +58,9 @@ export const signalsSchema = vehicleSchema
     passengerOccupied: true,
     rainLevel: true,
     pickupDistance: true,
+    driverDoorOpen: true,
+    rearOccupied: true,
+    windowPathClear: true,
   })
   .partial()
   .strict();
@@ -66,6 +73,12 @@ const reminderVehicleKeys = [
   'passengerRecline',
 ] as const;
 const rainPickupVehicleKeys = ['rainLevel', 'pickupDistance', 'frontDefrost'] as const;
+const departureWindowKeys = [
+  'driverDoorOpen',
+  'rearOccupied',
+  'windowPathClear',
+  'windowsClosed',
+] as const;
 export const faultSchema = z.enum([
   'none',
   ...Object.keys(catalog).flatMap((key) => {
@@ -73,7 +86,7 @@ export const faultSchema = z.enum([
     return [capability, `${capability}:rejected`, `${capability}:feedback-lost`] as const;
   }),
 ]);
-export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0', '1.3.0']);
+export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0']);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
   | 'armed'
@@ -171,7 +184,14 @@ export function previewVehicle(scenario: Scenario): Vehicle {
   const bounds = signalLabels[signal];
   const vehicle: Vehicle = {
     ...initialVehicle,
-    [signal]: Math.max(bounds.min, Math.min(bounds.max, threshold + (operator === 'gt' ? 2 : -2))),
+    ...(signal === 'driverExit'
+      ? {}
+      : {
+          [signal]: Math.max(
+            bounds.min,
+            Math.min(bounds.max, threshold + (operator === 'gt' ? 2 : -2)),
+          ),
+        }),
   };
   if (
     scenario.reminder ||
@@ -191,9 +211,19 @@ export function previewVehicle(scenario: Scenario): Vehicle {
   }
   if (scenario.actions.some((action) => action.capability === 'climate.frontDefrost'))
     vehicle.frontDefrost = false;
-  if (scenario.templateId === 'pickup') {
+  if (scenario.templateId === 'pickup' || scenario.templateId === 'passengerWait') {
     vehicle.playing = true;
     vehicle.track = '轻音乐';
+  }
+  if (scenario.templateId === 'passengerWait') {
+    vehicle.driverOccupied = true;
+    vehicle.driverDoorOpen = false;
+    vehicle.passengerOccupied = true;
+    vehicle.rearOccupied = false;
+  }
+  if (scenario.actions.some((action) => action.capability === 'window.close')) {
+    vehicle.windowPathClear = true;
+    vehicle.windowsClosed = false;
   }
   return vehicle;
 }
@@ -219,13 +249,14 @@ export class CabinRuntime {
   private locked = new Set<Resource>();
   private uncertain = new Set<Resource>();
   private reminderDueAt?: number;
+  private departure: 'unseen' | 'seated' | 'doorOpen' | 'exited' = 'unseen';
 
   constructor(
     scenario: Scenario,
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.3.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.4.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -246,7 +277,7 @@ export class CabinRuntime {
     )
       throw new Error('旧运行时不支持座椅、充电和定时提醒');
     if (
-      runtimeVersion !== '1.3.0' &&
+      !this.supportsRainPickup &&
       (this.scenario.trigger.signal === 'rainLevel' ||
         this.scenario.trigger.signal === 'pickupDistance' ||
         this.scenario.actions.some((action) => action.capability === 'climate.frontDefrost') ||
@@ -254,6 +285,15 @@ export class CabinRuntime {
         fault.startsWith('climate.frontDefrost'))
     )
       throw new Error('旧运行时不支持雨量、接娃距离和前挡除雾');
+    if (
+      runtimeVersion !== '1.4.0' &&
+      (this.scenario.templateId === 'rainClose' ||
+        this.scenario.trigger.signal === 'driverExit' ||
+        this.scenario.actions.some((action) => action.capability === 'window.close') ||
+        departureWindowKeys.some((key) => this.vehicle[key] !== undefined) ||
+        fault.startsWith('window.'))
+    )
+      throw new Error('旧运行时不支持主驾离车或车窗关闭');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
     this.log('armed', `场景 v${scenario.version} 已就绪；只运行一次，退出时不恢复设备状态`);
@@ -275,8 +315,28 @@ export class CabinRuntime {
     return this.runtimeVersion !== '1.0.0' && this.runtimeVersion !== '1.1.0';
   }
 
+  private get supportsRainPickup(): boolean {
+    return this.runtimeVersion === '1.3.0' || this.runtimeVersion === '1.4.0';
+  }
+
+  private observeDeparture() {
+    const { driverOccupied, driverDoorOpen, passengerOccupied, rearOccupied } = this.vehicle;
+    const passengerPresent = passengerOccupied === true || rearOccupied === true;
+    if (driverOccupied === true && driverDoorOpen === false) this.departure = 'seated';
+    else if (driverDoorOpen === true && this.departure === 'seated') this.departure = 'doorOpen';
+    else if (driverDoorOpen === false && this.departure === 'doorOpen')
+      this.departure = driverOccupied === false && passengerPresent ? 'exited' : 'unseen';
+    else if (this.departure === 'seated') this.departure = 'unseen';
+    else if (
+      this.departure === 'exited' &&
+      (driverOccupied !== false || driverDoorOpen !== false || !passengerPresent)
+    )
+      this.departure = 'unseen';
+  }
+
   private matches(): boolean {
     const { signal, operator, threshold } = this.scenario.trigger;
+    if (signal === 'driverExit') return this.departure === 'exited';
     const value = this.vehicle[signal];
     return value !== undefined && (operator === 'gt' ? value > threshold : value < threshold);
   }
@@ -308,6 +368,7 @@ export class CabinRuntime {
       this.stop('停车条件失效（需要 P 挡且车速为 0）；取消后续动作，不恢复设备');
       return;
     }
+    if (this.scenario.trigger.signal === 'driverExit') this.observeDeparture();
     if (this.scenario.reminder?.kind === 'charge' && this.vehicle.charging !== true) {
       if (this.fired) this.stop('充电已断开；取消后续动作与电量提醒');
       else if (this.conditionSince !== null) {
@@ -327,6 +388,15 @@ export class CabinRuntime {
       }
       if (this.pending && !this.seatAvailable(this.pending.action)) {
         this.log('cancelled', '座位占用失效；取消在途座椅动作', this.pending.action.capability);
+        this.pending = undefined;
+        this.failures++;
+        this.nextAction();
+      }
+      if (
+        this.pending?.action.capability === 'window.close' &&
+        this.vehicle.windowPathClear !== true
+      ) {
+        this.log('cancelled', '窗路出现障碍或状态未知，取消在途关窗', 'window.close');
         this.pending = undefined;
         this.failures++;
         this.nextAction();
@@ -366,6 +436,11 @@ export class CabinRuntime {
           `${seatLabels[action.seat]}未确认有人；禁止座椅动作`,
           action.capability,
         );
+        continue;
+      }
+      if (action.capability === 'window.close' && this.vehicle.windowPathClear !== true) {
+        this.failures++;
+        this.log('blocked', '窗路有障碍或状态未知，禁止关闭车窗', action.capability);
         continue;
       }
       if (
@@ -466,6 +541,9 @@ export class CabinRuntime {
       case 'media.pause':
         this.vehicle.playing = false;
         break;
+      case 'window.close':
+        this.vehicle.windowsClosed = true;
+        break;
       case 'media.volume':
         this.vehicle.volume = action.value;
         break;
@@ -523,7 +601,8 @@ export class CabinRuntime {
     const allowed = signalsSchema.parse(patch);
     if (
       (!this.supportsReminders && reminderVehicleKeys.some((key) => key in allowed)) ||
-      (this.runtimeVersion !== '1.3.0' && rainPickupVehicleKeys.some((key) => key in allowed))
+      (!this.supportsRainPickup && rainPickupVehicleKeys.some((key) => key in allowed)) ||
+      (this.runtimeVersion !== '1.4.0' && departureWindowKeys.some((key) => key in allowed))
     )
       throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
@@ -546,8 +625,15 @@ export class CabinRuntime {
       (!this.supportsReminders || !isParked(this.vehicle) || !this.seatAvailable(action))
     )
       throw new Error('必须停车且对应座位有人，才允许座椅动作');
-    if (action.capability === 'climate.frontDefrost' && this.runtimeVersion !== '1.3.0')
+    if (action.capability === 'climate.frontDefrost' && !this.supportsRainPickup)
       throw new Error('旧运行时不支持前挡除雾');
+    if (
+      action.capability === 'window.close' &&
+      (this.runtimeVersion !== '1.4.0' ||
+        !isParked(this.vehicle) ||
+        this.vehicle.windowPathClear !== true)
+    )
+      throw new Error('必须停车且确认窗路无障碍，才允许关闭车窗');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
     const resource = resourceOf(action.capability);
     this.locked.add(resource);

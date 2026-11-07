@@ -144,6 +144,8 @@ export async function compile(
     '\n定时午休用 templateId=nap、reminder={"kind":"wake","afterSeconds":秒数}，从准备完成起计时；分钟要换算为秒。充电等候用 templateId=charging、trigger.signal=batteryPercent、reminder={"kind":"charge","atPercent":目标百分比}，只在插枪时进入流程，达到或超过目标即提醒。提醒参数与触发持续时间、动作超时不同。座椅后仰用 {"capability":"seat.recline","seat":"driver 或 passenger","value":角度}，对应座位占用由执行器检查，不生成额外条件或动作。';
   system +=
     '\n雨天除雾用 templateId=rainDefog，模拟雨量等级用 rainLevel（0–3 整数），高于阈值用 gt，前挡除雾开关用 climate.frontDefrost（布尔值，前置动作 climate.power=true）。接娃等候用 templateId=pickup，距接娃点的模拟距离用 pickupDistance（米），小于阈值用 lt；暂停媒体用 media.pause=true。按明确顺序执行动作；这两个场景的既定退出策略是停止后续动作、保留已完成状态。';
+  system +=
+    '\n主驾离车后的乘客等候用 templateId=passengerWait 和 trigger={"signal":"driverExit","operator":"gt","threshold":0,"holdSeconds":用户指定的秒数}。开门离座、关门且副驾或后排仍有人由执行器识别，不写成额外字段或动作。雨天自动关窗用 templateId=rainClose、trigger.signal=rainLevel、operator=gt，关闭四门车窗用 {"capability":"window.close","value":true}，窗路无障碍由执行器检查。这两个模板均不附加 reminder。';
   if (baseScenario)
     system +=
       '\n每个动作都使用独立的 capability 和 value 键，例如 {"capability":"climate.fan","value":4}。';

@@ -161,6 +161,32 @@ export const templates: Record<TemplateId, Scenario> = {
       { capability: 'media.pause', value: true },
     ],
   },
+  passengerWait: {
+    ...base,
+    id: 'passengerWait',
+    templateId: 'passengerWait',
+    name: '主驾离车 · 乘客等候',
+    description: '主驾离车后，如果车内仍有乘客，维持空调并暂停媒体。',
+    sourcePrompt:
+      '创建「主驾离车 · 乘客等候」。仅 P 挡且车速为 0，观察到主驾在座、开门离座并关门后，副驾或后排明确有人，持续 3 秒。依次执行：开启空调电源；目标温度设为 24°C；暂停媒体。主驾回来、乘客离开或驶离时停止后续动作，保留已完成状态。',
+    trigger: { signal: 'driverExit', operator: 'gt', threshold: 0, holdSeconds: 3 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 24 },
+      { capability: 'media.pause', value: true },
+    ],
+  },
+  rainClose: {
+    ...base,
+    id: 'rainClose',
+    templateId: 'rainClose',
+    name: '雨天自动关窗',
+    description: '停车遇雨时，确认窗路无障碍后关闭四门车窗。',
+    sourcePrompt:
+      '创建「雨天自动关窗」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后关闭四门车窗。窗路必须明确无障碍，由执行器检查。驶离或雨量条件失效时停止后续动作，保留已完成状态。',
+    trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
+    actions: [{ capability: 'window.close', value: true }],
+  },
 };
 
 export function cloneTemplate(id: TemplateId): Scenario {

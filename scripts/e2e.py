@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.3.0"
+    assert unknown["runtimeVersion"] == "1.4.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -305,6 +305,64 @@ with sync_playwright() as p:
     assert pickup["vehicle"]["targetTemperature"] == 24 and not pickup["vehicle"]["playing"]
     passed("接娃点距离边界、离开范围取消及空调与媒体回读")
 
+    select_template("主驾离车 · 乘客等候")
+    page.get_by_role("button", name="生成场景", exact=True).click()
+    page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    page.get_by_role("button", name="修改当前场景", exact=True).click()
+    page.get_by_label("自然语言需求", exact=True).fill("持续时间改为 5 秒，目标温度设为 25°C")
+    page.get_by_role("button", name="生成修改草案", exact=True).click()
+    expect(page.locator(".draft-diff")).to_contain_text("25")
+    page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    driver = page.get_by_role("checkbox", name="主驾有人")
+    door = page.get_by_role("checkbox", name="主驾车门打开")
+    page.get_by_role("checkbox", name="副驾有人").uncheck()
+    page.get_by_role("checkbox", name="后排有人").check()
+    steps(1)
+    door.check()
+    driver.uncheck()
+    steps(4)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    door.uncheck()
+    steps(8)
+    wait = export_run("run-passenger-wait.json")
+    assert wait["status"] == "completed" and wait["vehicle"]["climatePower"]
+    assert wait["scenario"]["version"] == 3
+    assert wait["vehicle"]["targetTemperature"] == 25 and not wait["vehicle"]["playing"]
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    expect(page.locator(".run-status")).to_contain_text("执行完成")
+    passed("主驾关门才开始计时，后排乘客等候与离车证据重放")
+
+    select_template("雨天自动关窗")
+    slider.fill("1")
+    steps(6)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    slider.fill("2")
+    steps(5)
+    page.get_by_role("checkbox", name="窗路无障碍").uncheck()
+    expect(page.locator(".run-status")).to_contain_text("部分完成")
+    blocked = export_run("run-window-obstructed.json")
+    assert blocked["vehicle"]["windowsClosed"] is False
+    assert any(e["kind"] == "cancelled" and e.get("capability") == "window.close" for e in blocked["events"])
+    select_template("雨天自动关窗")
+    steps(6)
+    expect(page.get_by_text("车窗回读：四门全闭", exact=True)).to_be_visible()
+    assert export_run("run-window-close.json")["vehicle"]["windowsClosed"] is True
+    select_template("雨天自动关窗")
+    page.get_by_role("button", name="生成场景", exact=True).click()
+    page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    page.get_by_role("button", name="修改当前场景", exact=True).click()
+    page.get_by_label("自然语言需求", exact=True).fill("持续时间改为 7 秒，触发阈值设为 2 级")
+    page.get_by_role("button", name="生成修改草案", exact=True).click()
+    expect(page.locator(".draft-diff")).to_contain_text("7 秒")
+    page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    slider.fill("2")
+    steps(8)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    slider.fill("3")
+    steps(8)
+    assert export_run("run-window-close-modified.json")["vehicle"]["windowsClosed"] is True
+    passed("雨量严格阈值、在途障碍取消及四窗全闭回读")
+
     migration_context = browser.new_context()
     old_versions = [
         {**successful["scenario"], "version": 7, "name": "我保存的午休"},
@@ -314,7 +372,7 @@ with sync_playwright() as p:
     migration_page = migration_context.new_page()
     migration_page.goto(BASE_URL)
     expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
-    assert migration_page.locator(".scenario-nav").count() == 10
+    assert migration_page.locator(".scenario-nav").count() == 12
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
@@ -354,11 +412,11 @@ with sync_playwright() as p:
     page.keyboard.press("Escape")
     expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name=re.compile("能力目录")).click()
-    assert page.locator(".capability-card").count() == 10
+    assert page.locator(".capability-card").count() == 11
     expect(page.get_by_text(re.compile("不能直接透传百分比"))).to_be_visible()
     expect(page.get_by_text(re.compile("阅读灯开关不能等同于亮度调节"))).to_be_visible()
     page.get_by_role("button", name="场景工作台", exact=True).click()
-    passed("版本本地持久化、DSL 弹窗键盘关闭、10 项能力目录")
+    passed("版本本地持久化、DSL 弹窗键盘关闭、11 项能力目录")
 
     for prompt in ["停车休息时不要开空调", "取消停车休息场景", "停车休息持续二十秒后开空调"]:
         page.get_by_label("自然语言需求", exact=True).fill(prompt)
@@ -515,7 +573,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
-    assert page.locator(".scenario-nav").count() == 10
+    assert page.locator(".scenario-nav").count() == 12
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

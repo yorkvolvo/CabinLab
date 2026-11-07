@@ -33,6 +33,7 @@ import {
   Terminal,
   Thermometer,
   Upload,
+  Users,
   WandSparkles,
   Wind,
   X,
@@ -77,6 +78,8 @@ const icons = {
   charging: BatteryCharging,
   rainDefog: CloudRain,
   pickup: MapPin,
+  passengerWait: Users,
+  rainClose: CloudRain,
 };
 const eventLabels = {
   armed: '就绪',
@@ -129,11 +132,15 @@ export default function App() {
   const playedReminder = useRef('');
   const scenario = draft ?? selected;
   const currentVersions = versions.filter((s) => s.templateId === selected.templateId);
-  const currentSignal = signalLabels[scenario.trigger.signal];
+  const signal = scenario.trigger.signal;
+  const currentSignal = signalLabels[signal];
   const reminder = scenario.reminder;
   const hasSeatInputs = Boolean(
-    reminder || scenario.actions.some((action) => action.capability === 'seat.recline'),
+    reminder ||
+    signal === 'driverExit' ||
+    scenario.actions.some((action) => action.capability === 'seat.recline'),
   );
+  const hasWindowAction = scenario.actions.some((action) => action.capability === 'window.close');
   const latestReminder = snapshot?.events.filter((event) => event.kind === 'reminder').at(-1);
   const active = snapshot && !isTerminal(snapshot.status);
   const draftErrors = draft ? validateScenario(draft).errors : [];
@@ -898,28 +905,31 @@ export default function App() {
                         <span className="flow-dot" />
                         <span className="flow-label">WHEN / 触发条件</span>
                         <h3>
-                          {currentSignal.label}{' '}
-                          {scenario.trigger.operator === 'gt' ? '高于' : '低于'}
+                          {currentSignal.label}
+                          {signal !== 'driverExit' &&
+                            (scenario.trigger.operator === 'gt' ? ' 高于' : ' 低于')}
                         </h3>
                         <div className="trigger-inputs">
-                          <label>
-                            <input
-                              aria-label="触发阈值"
-                              type="number"
-                              min={currentSignal.min}
-                              max={currentSignal.max}
-                              value={scenario.trigger.threshold}
-                              onChange={(e) =>
-                                editScenario({
-                                  trigger: {
-                                    ...scenario.trigger,
-                                    threshold: Number(e.target.value),
-                                  },
-                                })
-                              }
-                            />
-                            <span>{currentSignal.unit}</span>
-                          </label>
+                          {signal !== 'driverExit' && (
+                            <label>
+                              <input
+                                aria-label="触发阈值"
+                                type="number"
+                                min={currentSignal.min}
+                                max={currentSignal.max}
+                                value={scenario.trigger.threshold}
+                                onChange={(e) =>
+                                  editScenario({
+                                    trigger: {
+                                      ...scenario.trigger,
+                                      threshold: Number(e.target.value),
+                                    },
+                                  })
+                                }
+                              />
+                              <span>{currentSignal.unit}</span>
+                            </label>
+                          )}
                           <span>持续</span>
                           <label>
                             <input
@@ -992,9 +1002,11 @@ export default function App() {
                                   <span className="action-value">
                                     {action.capability === 'media.pause'
                                       ? '暂停'
-                                      : action.value
-                                        ? '开启'
-                                        : '关闭'}
+                                      : action.capability === 'window.close'
+                                        ? '关闭'
+                                        : action.value
+                                          ? '开启'
+                                          : '关闭'}
                                   </span>
                                 ) : (
                                   <select
@@ -1146,54 +1158,54 @@ export default function App() {
                         <span className="eyebrow">实时信号</span>
                         <span className="small muted">调整输入，观察场景响应</span>
                       </div>
-                      <div className="signal-control">
-                        <label htmlFor="signal-slider">
-                          <Thermometer size={14} />
-                          {currentSignal.label}
-                          <strong>
-                            {vehicle[scenario.trigger.signal] ?? currentSignal.min}{' '}
-                            <span>{currentSignal.unit}</span>
-                          </strong>
-                        </label>
-                        <input
-                          id="signal-slider"
-                          aria-label="模拟传感器数值"
-                          type="range"
-                          min={currentSignal.min}
-                          max={currentSignal.max}
-                          step={
-                            scenario.trigger.signal === 'illuminance' ||
-                            scenario.trigger.signal === 'co2'
-                              ? 10
-                              : 1
-                          }
-                          value={vehicle[scenario.trigger.signal] ?? currentSignal.min}
-                          onChange={(e) =>
-                            changeSignals({ [scenario.trigger.signal]: Number(e.target.value) })
-                          }
-                        />
-                        <div className="range-labels">
-                          <span>
-                            {currentSignal.min}
-                            {currentSignal.unit}
-                          </span>
-                          <span>
-                            触发阈值 {scenario.trigger.threshold}
-                            {currentSignal.unit}
-                          </span>
-                          <span>
-                            {currentSignal.max}
-                            {currentSignal.unit}
-                          </span>
+                      {signal !== 'driverExit' && (
+                        <div className="signal-control">
+                          <label htmlFor="signal-slider">
+                            <Thermometer size={14} />
+                            {currentSignal.label}
+                            <strong>
+                              {vehicle[signal] ?? currentSignal.min}{' '}
+                              <span>{currentSignal.unit}</span>
+                            </strong>
+                          </label>
+                          <input
+                            id="signal-slider"
+                            aria-label="模拟传感器数值"
+                            type="range"
+                            min={currentSignal.min}
+                            max={currentSignal.max}
+                            step={
+                              scenario.trigger.signal === 'illuminance' ||
+                              scenario.trigger.signal === 'co2'
+                                ? 10
+                                : 1
+                            }
+                            value={vehicle[signal] ?? currentSignal.min}
+                            onChange={(e) => changeSignals({ [signal]: Number(e.target.value) })}
+                          />
+                          <div className="range-labels">
+                            <span>
+                              {currentSignal.min}
+                              {currentSignal.unit}
+                            </span>
+                            <span>
+                              触发阈值 {scenario.trigger.threshold}
+                              {currentSignal.unit}
+                            </span>
+                            <span>
+                              {currentSignal.max}
+                              {currentSignal.unit}
+                            </span>
+                          </div>
                         </div>
-                      </div>
+                      )}
                       {vehicle.frontDefrost !== undefined && (
                         <p className="small muted" role="status">
                           前挡除雾回读：{vehicle.frontDefrost ? '已开启' : '已关闭'}
                         </p>
                       )}
                       {hasSeatInputs && (
-                        <div className="reminder-controls" aria-label="座位和充电模拟输入">
+                        <div className="reminder-controls" aria-label="座位与车辆模拟输入">
                           <label>
                             <input
                               type="checkbox"
@@ -1226,9 +1238,54 @@ export default function App() {
                               已插枪充电
                             </label>
                           )}
-                          <small>
-                            座椅角度：主驾 {vehicle.driverRecline ?? 0}° · 副驾{' '}
-                            {vehicle.passengerRecline ?? 0}°
+                          {signal === 'driverExit' ? (
+                            <>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={vehicle.driverDoorOpen === true}
+                                  onChange={(event) =>
+                                    changeSignals({ driverDoorOpen: event.target.checked })
+                                  }
+                                />{' '}
+                                主驾车门打开
+                              </label>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={vehicle.rearOccupied === true}
+                                  onChange={(event) =>
+                                    changeSignals({ rearOccupied: event.target.checked })
+                                  }
+                                />{' '}
+                                后排有人
+                              </label>
+                              <small>
+                                开始预演或单步后，打开主驾车门、取消「主驾有人」，再关闭车门。
+                              </small>
+                            </>
+                          ) : (
+                            <small>
+                              座椅角度：主驾 {vehicle.driverRecline ?? 0}° · 副驾{' '}
+                              {vehicle.passengerRecline ?? 0}°
+                            </small>
+                          )}
+                        </div>
+                      )}
+                      {hasWindowAction && (
+                        <div className="reminder-controls" aria-label="车窗模拟输入">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={vehicle.windowPathClear === true}
+                              onChange={(event) =>
+                                changeSignals({ windowPathClear: event.target.checked })
+                              }
+                            />{' '}
+                            窗路无障碍
+                          </label>
+                          <small role="status">
+                            车窗回读：{vehicle.windowsClosed ? '四门全闭' : '未全闭'}
                           </small>
                         </div>
                       )}

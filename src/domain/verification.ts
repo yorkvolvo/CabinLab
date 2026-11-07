@@ -40,6 +40,8 @@ const actionsMatch = (s: RunSnapshot, action: Action) => {
       return v.playing && v.track === action.value;
     case 'media.pause':
       return !v.playing;
+    case 'window.close':
+      return v.windowsClosed === true;
     case 'media.volume':
       return v.volume === action.value;
     case 'ambient.light':
@@ -63,7 +65,6 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
     ),
   );
   const initial = previewVehicle(baseline);
-  const active = initial[signal]!;
   const cases: VerificationCase[] = [];
   let latest: CabinRuntime | undefined;
   const create = (v = initial) => {
@@ -88,6 +89,77 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
     }
   };
 
+  if (signal === 'driverExit') {
+    const depart = (run: CabinRuntime) => {
+      run.setSignals({ driverDoorOpen: true });
+      run.setSignals({ driverOccupied: false });
+      run.setSignals({ driverDoorOpen: false });
+    };
+    test('departure', '开门离座并关门后才开始计时', '触发边界', () => {
+      const r = create();
+      expect(count(r.step(10), 'accepted') === 0, '主驾仍在车内');
+      depart(r);
+      expect(count(r.step(hold - 1), 'accepted') === 0, '离车后过早触发');
+      const s = r.step(1 + baseline.actions.length);
+      expect(
+        s.status === 'completed' && baseline.actions.every((action) => actionsMatch(s, action)),
+        '空调或媒体未达到预期',
+      );
+      expect(
+        JSON.stringify(replayEvidence(s).snapshot().events) === JSON.stringify(s.events),
+        '重放不一致',
+      );
+      return '满足完整条件后回读空调与媒体，离车顺序可重放';
+    });
+    test('rear', '副驾为空且后排有人时可以等候', '占用守卫', () => {
+      const r = create({ ...initial, passengerOccupied: false, rearOccupied: true });
+      depart(r);
+      expect(r.step(30).status === 'completed', '后排占用未生效');
+      return '后排明确有人即可触发';
+    });
+    test('absent', '初始无人或只离座均不触发', '离车守卫', () => {
+      const absent = create({ ...initial, driverOccupied: false });
+      depart(absent);
+      expect(count(absent.step(30), 'accepted') === 0, '未观察到主驾在座');
+      const seated = create();
+      seated.setSignals({ driverOccupied: false });
+      expect(count(seated.step(30), 'accepted') === 0, '仅离座不代表离车');
+      depart(seated);
+      expect(count(seated.step(30), 'accepted') === 0, '早先离座不应与后续开门拼成离车');
+      return '预演需要完整离车输入';
+    });
+    test('empty', '乘客占用未知或空舱时不触发', '占用守卫', () => {
+      const r = create({ ...initial, passengerOccupied: undefined, rearOccupied: false });
+      depart(r);
+      r.setSignals({ rearOccupied: true });
+      expect(count(r.step(30), 'accepted') === 0, '未在离车时确认仍有乘客');
+      return '乘客后来上车需要重新观察一次离车';
+    });
+    test('exit', '主驾返回、乘客离开或驶离时取消在途动作', '运行守卫', () => {
+      for (const change of [
+        { driverOccupied: true },
+        { passengerOccupied: false },
+        { gear: 'D' },
+      ] as const) {
+        const r = create();
+        depart(r);
+        expect(count(r.step(hold), 'accepted') === 1, '在途请求前提未满足');
+        const s = r.setSignals(change);
+        expect(s.status === 'stopped' && count(s, 'confirmed') === 0, '条件退出后仍有动作达成');
+      }
+      return '动作回读前复查离车、占用和停车状态';
+    });
+    return {
+      scenario: structuredClone(scenario),
+      contractVersion: '1.1',
+      baseline: `${baseline.name} · 固定离车基线 v1`,
+      passed: cases.filter((c) => c.passed).length,
+      total: cases.length,
+      cases,
+    };
+  }
+
+  const active = initial[signal]!;
   const reminder = baseline.reminder;
   if (reminder) {
     const readyTime = hold + baseline.actions.length;
@@ -394,7 +466,9 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
     const manual: Action =
       resourceOf(first) === 'ambient'
         ? { capability: 'ambient.light', value: 25 }
-        : { capability: 'climate.temperature', value: 27 };
+        : first === 'window.close'
+          ? { capability: 'window.close', value: true }
+          : { capability: 'climate.temperature', value: 27 };
     r.manual(manual);
     const s = r.step(90);
     expect(actionsMatch(s, manual), '自动化覆盖了用户手动设定');
