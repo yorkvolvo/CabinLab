@@ -2,6 +2,8 @@ import { z } from 'zod';
 import {
   actionLabel,
   catalog,
+  reminderLabel,
+  seatLabels,
   signalLabels,
   resourceOf,
   validateScenario,
@@ -26,9 +28,37 @@ export const vehicleSchema = z
     track: z.string().nullable(),
     volume: z.number().min(0).max(60),
     light: z.number().min(0).max(100),
+    charging: z.boolean().optional(),
+    batteryPercent: z.number().min(0).max(100).optional(),
+    driverOccupied: z.boolean().optional(),
+    passengerOccupied: z.boolean().optional(),
+    driverRecline: z.number().int().min(0).max(45).optional(),
+    passengerRecline: z.number().int().min(0).max(45).optional(),
   })
   .strict();
 export type Vehicle = z.infer<typeof vehicleSchema>;
+export const signalsSchema = vehicleSchema
+  .pick({
+    temperature: true,
+    illuminance: true,
+    co2: true,
+    gear: true,
+    speed: true,
+    charging: true,
+    batteryPercent: true,
+    driverOccupied: true,
+    passengerOccupied: true,
+  })
+  .partial()
+  .strict();
+const newVehicleKeys = [
+  'charging',
+  'batteryPercent',
+  'driverOccupied',
+  'passengerOccupied',
+  'driverRecline',
+  'passengerRecline',
+] as const;
 export const faultSchema = z.enum([
   'none',
   ...Object.keys(catalog).flatMap((key) => {
@@ -36,13 +66,21 @@ export const faultSchema = z.enum([
     return [capability, `${capability}:rejected`, `${capability}:feedback-lost`] as const;
   }),
 ]);
-export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0']);
+export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0']);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
-  'armed' | 'executing' | 'completed' | 'partial' | 'uncertain' | 'stopped' | 'cancelled';
+  | 'armed'
+  | 'executing'
+  | 'waiting'
+  | 'completed'
+  | 'partial'
+  | 'uncertain'
+  | 'stopped'
+  | 'cancelled';
 export const runStatusLabels: Record<RunStatus, string> = {
   armed: '等待触发',
   executing: '正在执行',
+  waiting: '等待提醒',
   completed: '执行完成',
   partial: '部分完成',
   uncertain: '结果待核实',
@@ -64,6 +102,8 @@ export type EventKind =
   | 'manual'
   | 'cancelled'
   | 'stopped'
+  | 'waiting'
+  | 'reminder'
   | 'completed';
 export interface RunEvent {
   index: number;
@@ -77,7 +117,7 @@ export type RunCommand =
   | {
       time: number;
       type: 'signals';
-      patch: Partial<Pick<Vehicle, 'temperature' | 'illuminance' | 'co2' | 'gear' | 'speed'>>;
+      patch: z.infer<typeof signalsSchema>;
     }
   | { time: number; type: 'manual'; action: Action }
   | { time: number; type: 'cancel' };
@@ -100,6 +140,7 @@ export interface RunSnapshot extends RunEvidence {
   holdElapsed: number;
   locked: Resource[];
   pending?: Capability;
+  reminderDueAt?: number;
 }
 
 export const initialVehicle: Vehicle = {
@@ -121,14 +162,32 @@ export const initialVehicle: Vehicle = {
 export function previewVehicle(scenario: Scenario): Vehicle {
   const { signal, threshold, operator } = scenario.trigger;
   const bounds = signalLabels[signal];
-  return {
+  const vehicle: Vehicle = {
     ...initialVehicle,
     [signal]: Math.max(bounds.min, Math.min(bounds.max, threshold + (operator === 'gt' ? 2 : -2))),
   };
+  if (
+    scenario.reminder ||
+    scenario.actions.some((action) => action.capability === 'seat.recline')
+  ) {
+    vehicle.driverOccupied = true;
+    vehicle.passengerOccupied = false;
+    vehicle.driverRecline = 0;
+    vehicle.passengerRecline = 0;
+  }
+  if (scenario.reminder?.kind === 'charge') {
+    vehicle.charging = true;
+    vehicle.batteryPercent = Math.min(
+      vehicle.batteryPercent ?? 60,
+      Math.max(0, scenario.reminder.atPercent - 10),
+    );
+  }
+  return vehicle;
 }
 
 export const isParked = (v: Vehicle) => v.gear === 'P' && v.speed === 0;
-export const isTerminal = (status: RunStatus) => !['armed', 'executing'].includes(status);
+export const isTerminal = (status: RunStatus) =>
+  !['armed', 'executing', 'waiting'].includes(status);
 
 export class CabinRuntime {
   private readonly scenario: Scenario;
@@ -146,13 +205,14 @@ export class CabinRuntime {
   private failures = 0;
   private locked = new Set<Resource>();
   private uncertain = new Set<Resource>();
+  private reminderDueAt?: number;
 
   constructor(
     scenario: Scenario,
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.1.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.2.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -163,6 +223,15 @@ export class CabinRuntime {
     if (!validated.scenario.confirmed) throw new Error('请先确认场景参数与退出策略');
     this.scenario = structuredClone(validated.scenario);
     this.vehicle = vehicleSchema.parse(structuredClone(vehicle));
+    if (
+      runtimeVersion !== '1.2.0' &&
+      (this.scenario.reminder ||
+        this.scenario.trigger.signal === 'batteryPercent' ||
+        this.scenario.actions.some((action) => action.capability === 'seat.recline') ||
+        newVehicleKeys.some((key) => this.vehicle[key] !== undefined) ||
+        fault.startsWith('seat.'))
+    )
+      throw new Error('旧运行时不支持座椅、充电和定时提醒');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
     this.log('armed', `场景 v${scenario.version} 已就绪；只运行一次，退出时不恢复设备状态`);
@@ -182,7 +251,16 @@ export class CabinRuntime {
 
   private matches(): boolean {
     const { signal, operator, threshold } = this.scenario.trigger;
-    return operator === 'gt' ? this.vehicle[signal] > threshold : this.vehicle[signal] < threshold;
+    const value = this.vehicle[signal];
+    return value !== undefined && (operator === 'gt' ? value > threshold : value < threshold);
+  }
+
+  private seatAvailable(action: Action): boolean {
+    return (
+      action.capability !== 'seat.recline' ||
+      (action.seat === 'driver' ? this.vehicle.driverOccupied : this.vehicle.passengerOccupied) ===
+        true
+    );
   }
 
   private stop(reason: string) {
@@ -193,6 +271,7 @@ export class CabinRuntime {
         this.pending.action.capability,
       );
     this.pending = undefined;
+    this.reminderDueAt = undefined;
     this.status = 'stopped';
     this.log('stopped', reason);
   }
@@ -203,8 +282,29 @@ export class CabinRuntime {
       this.stop('停车条件失效（需要 P 挡且车速为 0）；取消后续动作，不恢复设备');
       return;
     }
+    if (this.scenario.reminder?.kind === 'charge' && this.vehicle.charging !== true) {
+      if (this.fired) this.stop('充电已断开；取消后续动作与电量提醒');
+      else if (this.conditionSince !== null) {
+        this.conditionSince = null;
+        this.log('reset', '未在充电；持续计时归零');
+      }
+      return;
+    }
+    if (this.status === 'waiting') {
+      this.checkReminder();
+      return;
+    }
     if (this.fired) {
-      if (!this.matches()) this.stop('触发条件已失效；停止在途与后续动作');
+      if (!this.scenario.reminder && !this.matches()) {
+        this.stop('触发条件已失效；停止在途与后续动作');
+        return;
+      }
+      if (this.pending && !this.seatAvailable(this.pending.action)) {
+        this.log('cancelled', '座位占用失效；取消在途座椅动作', this.pending.action.capability);
+        this.pending = undefined;
+        this.failures++;
+        this.nextAction();
+      }
       return;
     }
     if (!this.matches()) {
@@ -231,9 +331,18 @@ export class CabinRuntime {
       const needsPower = ['climate.temperature', 'climate.fan', 'climate.recirculation'].includes(
         action.capability,
       );
-      if (!isParked(this.vehicle) || !this.matches()) {
+      if (!isParked(this.vehicle) || (!this.scenario.reminder && !this.matches())) {
         this.stop('动作前策略检查未通过');
         return;
+      }
+      if (action.capability === 'seat.recline' && !this.seatAvailable(action)) {
+        this.failures++;
+        this.log(
+          'blocked',
+          `${seatLabels[action.seat]}未确认有人；禁止座椅动作`,
+          action.capability,
+        );
+        continue;
       }
       if (
         this.locked.has(resource) ||
@@ -265,6 +374,39 @@ export class CabinRuntime {
       this.log('accepted', `请求已接受：${actionLabel(action)}；等待状态回读`, action.capability);
       return;
     }
+    const reminder = this.scenario.reminder;
+    if (reminder) {
+      this.status = 'waiting';
+      if (reminder.kind === 'wake') this.reminderDueAt = this.time + reminder.afterSeconds;
+      this.log('waiting', reminderLabel(reminder));
+      this.checkReminder();
+    } else this.finish();
+  }
+
+  private checkReminder() {
+    const reminder = this.scenario.reminder;
+    if (!reminder) return;
+    if (reminder.kind === 'wake' && this.vehicle.driverOccupied !== true) {
+      this.stop('主驾未确认有人；取消定时唤醒');
+      return;
+    }
+    const due =
+      reminder.kind === 'wake'
+        ? this.time >= (this.reminderDueAt ?? Infinity)
+        : this.vehicle.batteryPercent !== undefined &&
+          this.vehicle.batteryPercent >= reminder.atPercent;
+    if (!due) return;
+    this.log(
+      'reminder',
+      reminder.kind === 'wake'
+        ? '午休时间到，请醒来'
+        : `电量已达到 ${reminder.atPercent}%，请查看充电状态`,
+    );
+    this.reminderDueAt = undefined;
+    this.finish();
+  }
+
+  private finish() {
     this.status = this.uncertain.size ? 'uncertain' : this.failures ? 'partial' : 'completed';
     this.log(
       'completed',
@@ -303,6 +445,10 @@ export class CabinRuntime {
       case 'ambient.light':
         this.vehicle.light = action.value;
         break;
+      case 'seat.recline':
+        this.vehicle[action.seat === 'driver' ? 'driverRecline' : 'passengerRecline'] =
+          action.value;
+        break;
     }
   }
 
@@ -338,19 +484,18 @@ export class CabinRuntime {
     return this.snapshot();
   }
 
-  setSignals(
-    patch: Partial<Pick<Vehicle, 'temperature' | 'illuminance' | 'co2' | 'gear' | 'speed'>>,
-  ) {
-    const allowed = z
-      .object({
-        temperature: vehicleSchema.shape.temperature.optional(),
-        illuminance: vehicleSchema.shape.illuminance.optional(),
-        co2: vehicleSchema.shape.co2.optional(),
-        gear: vehicleSchema.shape.gear.optional(),
-        speed: vehicleSchema.shape.speed.optional(),
-      })
-      .strict()
-      .parse(patch);
+  advanceTo(target: number) {
+    if (!Number.isInteger(target) || target < 0 || target > this.time + 3600)
+      throw new Error('目标虚拟时间不合法');
+    while (this.time < target && !isTerminal(this.status))
+      this.step(Math.min(600, target - this.time));
+    return this.snapshot();
+  }
+
+  setSignals(patch: z.infer<typeof signalsSchema>) {
+    const allowed = signalsSchema.parse(patch);
+    if (this.runtimeVersion !== '1.2.0' && newVehicleKeys.some((key) => key in allowed))
+      throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
     this.vehicle = vehicleSchema.parse({ ...this.vehicle, ...allowed });
     this.log('input', `信号变化：${JSON.stringify(allowed)}`);
@@ -367,6 +512,11 @@ export class CabinRuntime {
           : [action],
     });
     if (!validated.scenario) throw new Error('手动动作参数不合法');
+    if (
+      action.capability === 'seat.recline' &&
+      (this.runtimeVersion !== '1.2.0' || !isParked(this.vehicle) || !this.seatAvailable(action))
+    )
+      throw new Error('必须停车且对应座位有人，才允许座椅动作');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
     const resource = resourceOf(action.capability);
     this.locked.add(resource);
@@ -391,6 +541,7 @@ export class CabinRuntime {
     if (this.pending)
       this.log('cancelled', '停止预演，取消在途请求', this.pending.action.capability);
     this.pending = undefined;
+    this.reminderDueAt = undefined;
     this.status = 'cancelled';
     this.log('cancelled', '用户停止了本次运行；已完成的设备动作不回滚');
     return this.snapshot();
@@ -420,6 +571,7 @@ export class CabinRuntime {
       holdElapsed: this.conditionSince === null ? 0 : this.time - this.conditionSince,
       locked: [...this.locked],
       pending: this.pending?.action.capability,
+      ...(this.reminderDueAt === undefined ? {} : { reminderDueAt: this.reminderDueAt }),
       caveat: '仅表示当前虚拟车辆模型中的状态回读，不构成真车验收或安全认证。',
     });
   }
@@ -433,16 +585,12 @@ export function replayEvidence(evidence: RunEvidence): CabinRuntime {
     `${evidence.runId}-replay`,
     evidence.runtimeVersion,
   );
-  const advance = (target: number) => {
-    while (runtime.snapshot().time < target && !isTerminal(runtime.snapshot().status))
-      runtime.step(Math.min(600, target - runtime.snapshot().time));
-  };
   for (const command of evidence.commands) {
-    advance(command.time);
+    runtime.advanceTo(command.time);
     if (command.type === 'signals') runtime.setSignals(command.patch);
     if (command.type === 'manual') runtime.manual(command.action);
     if (command.type === 'cancel') runtime.cancel();
   }
-  advance(evidence.time);
+  runtime.advanceTo(evidence.time);
   return runtime;
 }

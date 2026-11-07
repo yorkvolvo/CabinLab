@@ -36,6 +36,12 @@ with sync_playwright() as p:
     context = browser.new_context(viewport={"width": 1536, "height": 1150})
     page = context.new_page()
     errors = []
+    page.add_init_script("""window.reminderTones = 0;
+      const startTone = OscillatorNode.prototype.start;
+      OscillatorNode.prototype.start = function (...args) {
+        window.reminderTones++;
+        return startTone.apply(this, args);
+      };""")
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(BASE_URL)
     page.wait_for_load_state("networkidle")
@@ -130,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.1.0"
+    assert unknown["runtimeVersion"] == "1.2.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -224,6 +230,48 @@ with sync_playwright() as p:
         assert page.locator(".check-item.passed").count() == 22
     passed("新增暖舱、强力降温、夜间放松可预演，各通过 22 项固定基线")
 
+    select_template("定时午休")
+    steps(6)
+    expect(page.locator(".run-status")).to_contain_text("等待提醒")
+    expect(page.get_by_text("距离唤醒还有 1200 个虚拟秒", exact=True)).to_be_visible()
+    assert page.evaluate("window.reminderTones") == 0
+    page.get_by_role("button", name="快进到唤醒", exact=True).click()
+    expect(page.get_by_role("alert")).to_have_text("午休时间到，请醒来")
+    page.wait_for_function("window.reminderTones === 2")
+    nap = export_run("run-nap.json")
+    assert nap["time"] == 1206 and nap["vehicle"]["driverRecline"] == 25
+    assert sum(event["kind"] == "reminder" for event in nap["events"]) == 1
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    expect(page.get_by_role("alert")).to_have_text("午休时间到，请醒来")
+    assert page.evaluate("window.reminderTones") == 2
+    passed("定时午休准确唤醒，提示音只在预演播放，历史重放静音")
+
+    select_template("充电等候")
+    page.get_by_role("checkbox", name="已插枪充电").uncheck()
+    page.get_by_role("checkbox", name="主驾有人").uncheck()
+    page.get_by_role("checkbox", name="副驾有人").check()
+    steps(3)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    page.get_by_role("checkbox", name="已插枪充电").check()
+    steps(2)
+    expect(page.locator(".run-status")).to_contain_text("等待提醒")
+    slider = page.get_by_role("slider", name="模拟传感器数值")
+    slider.fill("79")
+    expect(page.get_by_role("alert")).to_have_count(0)
+    slider.fill("80")
+    expect(page.get_by_role("alert")).to_contain_text("电量已达到 80%")
+    charge = export_run("run-charging.json")
+    assert charge["vehicle"]["driverRecline"] == 0 and charge["vehicle"]["climatePower"]
+    assert charge["status"] == "partial"
+    assert not any(e["kind"] == "accepted" and e.get("capability") == "seat.recline" for e in charge["events"])
+    select_template("充电等候")
+    steps(3)
+    page.get_by_role("checkbox", name="已插枪充电").uncheck()
+    expect(page.locator(".run-status")).to_contain_text("条件退出")
+    page.get_by_role("slider", name="模拟传感器数值").fill("100")
+    expect(page.get_by_role("alert")).to_have_count(0)
+    passed("充电等候守卫、空座不动、目标电量提醒和拔枪取消")
+
     migration_context = browser.new_context()
     old_versions = [
         {**successful["scenario"], "version": 7, "name": "我保存的午休"},
@@ -233,7 +281,7 @@ with sync_playwright() as p:
     migration_page = migration_context.new_page()
     migration_page.goto(BASE_URL)
     expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
-    assert migration_page.locator(".scenario-nav").count() == 6
+    assert migration_page.locator(".scenario-nav").count() == 8
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
@@ -273,11 +321,11 @@ with sync_playwright() as p:
     page.keyboard.press("Escape")
     expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name=re.compile("能力目录")).click()
-    assert page.locator(".capability-card").count() == 8
+    assert page.locator(".capability-card").count() == 9
     expect(page.get_by_text(re.compile("不能直接透传百分比"))).to_be_visible()
     expect(page.get_by_text(re.compile("阅读灯开关不能等同于亮度调节"))).to_be_visible()
     page.get_by_role("button", name="场景工作台", exact=True).click()
-    passed("版本本地持久化、DSL 弹窗键盘关闭、8 项能力目录")
+    passed("版本本地持久化、DSL 弹窗键盘关闭、9 项能力目录")
 
     for prompt in ["停车休息时不要开空调", "取消停车休息场景", "停车休息持续二十秒后开空调"]:
         page.get_by_label("自然语言需求", exact=True).fill(prompt)
@@ -434,7 +482,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
-    assert page.locator(".scenario-nav").count() == 6
+    assert page.locator(".scenario-nav").count() == 8
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

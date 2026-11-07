@@ -98,6 +98,39 @@ export const templates: Record<TemplateId, Scenario> = {
       { capability: 'media.play', value: '自然白噪音' },
     ],
   },
+  nap: {
+    ...base,
+    id: 'nap',
+    templateId: 'nap',
+    name: '定时午休',
+    description: '停车后调整有人就坐的主驾座椅，营造舒适环境，准备完成后开始唤醒计时。',
+    sourcePrompt:
+      '定时午休：停车且车内温度高于 28°C 持续 2 秒，依次执行：主驾有人才把主驾座椅后仰到 25°；开启空调；设目标温度为 24°C；播放自然白噪音。准备动作完成后 20 分钟唤醒，离座或驶离取消。',
+    trigger: { signal: 'temperature', operator: 'gt', threshold: 28, holdSeconds: 2 },
+    actions: [
+      { capability: 'seat.recline', seat: 'driver', value: 25 },
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 24 },
+      { capability: 'media.play', value: '自然白噪音' },
+    ],
+    reminder: { kind: 'wake', afterSeconds: 1200 },
+  },
+  charging: {
+    ...base,
+    id: 'charging',
+    templateId: 'charging',
+    name: '充电等候',
+    description: '停车充电时进入等候，主驾有人才调整座椅，达到目标电量后提示。',
+    sourcePrompt:
+      '充电等候：停车并插枪充电，电量低于 100% 时立即启动（持续 0 秒）。依次执行：主驾有人才把主驾座椅后仰到 20°；开启空调；设目标温度为 24°C。电量达到 80% 提醒一次，拔枪或驶离取消。',
+    trigger: { signal: 'batteryPercent', operator: 'lt', threshold: 100, holdSeconds: 0 },
+    actions: [
+      { capability: 'seat.recline', seat: 'driver', value: 20 },
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 24 },
+    ],
+    reminder: { kind: 'charge', atPercent: 80 },
+  },
 };
 
 export function cloneTemplate(id: TemplateId): Scenario {

@@ -1,6 +1,12 @@
 import { cloneTemplate, templates } from './templates';
 import { z } from 'zod';
-import { scenarioSchema, signalLabels, validateScenario, type Scenario } from './scenario';
+import {
+  reminderLabel,
+  scenarioSchema,
+  signalLabels,
+  validateScenario,
+  type Scenario,
+} from './scenario';
 
 export const modelPatchSchema = scenarioSchema
   .omit({
@@ -20,8 +26,8 @@ export const modelPatchSchema = scenarioSchema
   .extend({ trigger: scenarioSchema.shape.trigger.partial().optional() });
 
 export function modelContext(scenario: Scenario) {
-  const { trigger, actions, timeoutSeconds } = scenario;
-  return { trigger, actions, timeoutSeconds };
+  const { trigger, actions, timeoutSeconds, reminder } = scenario;
+  return { trigger, actions, timeoutSeconds, ...(reminder ? { reminder } : {}) };
 }
 
 export function parseModelModification(
@@ -74,12 +80,21 @@ export function assumptionsFor(scenario: Scenario): string[] {
   return [
     '停车定义为 P 挡且车速为 0；任何动作前和状态回读前都会重新检查。',
     `${signalLabels[signal].label}${operator === 'gt' ? '高于' : '低于'} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
-    '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的空调、媒体或灯光。',
+    scenario.reminder
+      ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。退出不回滚。`
+      : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
+    ...(scenario.actions.some((action) => action.capability === 'seat.recline')
+      ? ['对应座位需明确有人，座椅请求与回读前都会检查占用。']
+      : []),
     `用户手动操作优先；每个动作 ${scenario.timeoutSeconds} 秒超时，失败后仅继续不依赖该动作的任务。`,
   ];
 }
 
 export function compileDemo(prompt: string): CompileResult {
+  const exact = Object.values(templates).find(
+    (template) => template.sourcePrompt === prompt.trim(),
+  );
+  if (exact?.reminder) return demoDraft(exact.templateId, prompt);
   const intent = prompt
     .replace(/(?:不(?:要)?|无需)(?:恢复|还原|复原)(?:设备(?:状态)?)?/g, '')
     .replace(/(?:我)?开始(?:开车|行驶)就(?:结束休息模式|停止这个场景|结束场景)/g, '');
@@ -135,6 +150,10 @@ export function compileDemo(prompt: string): CompileResult {
       'needs_clarification',
       '暂时无法匹配需求。请明确选择停车休息、阅读或空气清新场景；本地模式不会把未知需求替换成可执行模板。',
     );
+  return demoDraft(id, prompt);
+}
+
+function demoDraft(id: Scenario['templateId'], prompt: string): CompileResult {
   const draft = cloneTemplate(id);
   draft.confirmed = false;
   draft.sourcePrompt = prompt;
@@ -164,6 +183,9 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
     { key: 'media.volume', names: '音量|媒体音量', unit: '%|％' },
     { key: 'climate.fan', names: '风量|风量档位', unit: '档' },
     { key: 'ambient.light', names: '亮度|阅读灯亮度', unit: '%|％' },
+    { key: 'wake', names: '唤醒时间|午休时长', unit: '秒' },
+    { key: 'charge', names: '提醒电量|充电提醒阈值', unit: '%|％' },
+    { key: 'seat.recline', names: '座椅后仰角度', unit: '°|度' },
   ];
   const changed = new Set<string>();
   const clauses = prompt
@@ -191,6 +213,10 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
       const value = Number(match[1]);
       if (field.key === 'hold') draft.trigger.holdSeconds = value;
       else if (field.key === 'threshold') draft.trigger.threshold = value;
+      else if (field.key === 'wake' && draft.reminder?.kind === 'wake')
+        draft.reminder.afterSeconds = value;
+      else if (field.key === 'charge' && draft.reminder?.kind === 'charge')
+        draft.reminder.atPercent = value;
       else {
         const action = draft.actions.find((a) => a.capability === field.key);
         if (!action)

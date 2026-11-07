@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { actionSchema, catalog, scenarioSchema, type Capability } from './scenario';
+import { actionSchema, catalog, resourceSchema, scenarioSchema, type Capability } from './scenario';
 import {
   faultSchema,
   replayEvidence,
   runtimeVersionSchema,
+  signalsSchema,
   vehicleSchema,
   type RunSnapshot,
 } from './runtime';
@@ -11,10 +12,6 @@ import {
 export const evidenceMaxBytes = 1024 * 1024;
 const capabilitySchema = z.enum(Object.keys(catalog) as [Capability, ...Capability[]]);
 const timeSchema = z.number().int().min(0).max(3600);
-const signalsSchema = vehicleSchema
-  .pick({ temperature: true, illuminance: true, co2: true, gear: true, speed: true })
-  .partial()
-  .strict();
 const evidenceSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -26,6 +23,7 @@ const evidenceSchema = z
     status: z.enum([
       'armed',
       'executing',
+      'waiting',
       'completed',
       'partial',
       'uncertain',
@@ -55,6 +53,8 @@ const evidenceSchema = z
               'manual',
               'cancelled',
               'stopped',
+              'waiting',
+              'reminder',
               'completed',
             ]),
             detail: z.string().max(1000),
@@ -77,8 +77,9 @@ const evidenceSchema = z
     caveat: z.string().max(500),
     progress: z.number().min(0).max(1),
     holdElapsed: timeSchema,
-    locked: z.array(z.enum(['climate', 'media', 'ambient'])).max(3),
+    locked: z.array(resourceSchema).max(4),
     pending: capabilitySchema.optional(),
+    reminderDueAt: timeSchema.optional(),
   })
   .strict();
 
@@ -167,6 +168,7 @@ export function inspectEvidence(text: string): { source: RunSnapshot; replayed: 
     'holdElapsed',
     'locked',
     'pending',
+    'reminderDueAt',
     'caveat',
   ] as const;
   const mismatch = fields.filter((key) => canonical(source[key]) !== canonical(replayed[key]));

@@ -2,16 +2,32 @@ import assert from 'node:assert/strict';
 import { mkdir, appendFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { compile, configFromEnv } from '../server/provider';
-import { actionLabel, catalog, signalLabels, type Scenario } from '../src/domain/scenario';
+import {
+  actionLabel,
+  catalog,
+  reminderLabel,
+  signalLabels,
+  type Scenario,
+} from '../src/domain/scenario';
 import { templates } from '../src/domain/templates';
 import { CompileError } from '../src/domain/compiler';
 import { parseMessagesStream } from '../server/messages';
+import { CabinRuntime, previewVehicle } from '../src/domain/runtime';
+import { inspectEvidence } from '../src/domain/evidence';
 
 const config = configFromEnv(process.env);
 assert.notEqual(config.provider, 'demo', '真实模型验收必须显式配置模型服务');
 const rounds = Number(process.argv[2] ?? 3);
 assert.ok(Number.isSafeInteger(rounds) && rounds > 0, '轮数必须为正整数');
 const models = process.argv.slice(3).length ? process.argv.slice(3) : [config.model!];
+const families = process.env.VERIFY_TEMPLATES?.split(',');
+const baselines = Object.values(templates).filter(
+  (template) => !families || families.includes(template.templateId),
+);
+assert.ok(
+  baselines.length && (!families || baselines.length === families.length),
+  'VERIFY_TEMPLATES 包含未知或重复的场景族',
+);
 await mkdir('.local', { recursive: true });
 const report = `.local/model-stability-${new Date().toISOString().replaceAll(':', '-')}.ndjson`;
 const records: {
@@ -24,7 +40,7 @@ const records: {
 
 batch: for (const model of models) {
   for (let round = 1; round <= rounds; round++) {
-    for (const baseline of Object.values(templates)) {
+    for (const baseline of baselines) {
       let base: Scenario = structuredClone(baseline);
       for (const intent of ['create', 'modify'] as const) {
         const numeric = base.actions.find((action) => typeof action.value === 'number')!;
@@ -36,12 +52,24 @@ batch: for (const model of models) {
               ? 30
               : numeric.capability === 'ambient.light'
                 ? 100
-                : 60,
+                : numeric.capability === 'seat.recline'
+                  ? 45
+                  : 60,
         );
+        const expected = structuredClone(intent === 'create' ? baseline : base);
+        if (intent === 'modify') {
+          if (expected.reminder?.kind === 'wake') expected.reminder.afterSeconds += 60;
+          else if (expected.reminder?.kind === 'charge') expected.reminder.atPercent += 5;
+          else expected.trigger.holdSeconds += 2;
+          expected.actions.find((action) => action.capability === numeric.capability)!.value =
+            changed;
+        }
         const prompt =
           intent === 'create'
-            ? `创建“${baseline.name}”。仅 P 挡且车速为 0，${signalLabels[baseline.trigger.signal].label}${baseline.trigger.operator === 'gt' ? '高于' : '低于'} ${baseline.trigger.threshold}${signalLabels[baseline.trigger.signal].unit}连续 ${baseline.trigger.holdSeconds} 秒，依次执行：${baseline.actions.map(actionLabel).join('；')}。开始行驶或触发条件失效时停止后续动作，不恢复旧值。`
-            : `只将持续时间改为 ${base.trigger.holdSeconds + 2} 秒，${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}。其余字段、动作及顺序全部原样保留，不增删动作。`;
+            ? baseline.reminder
+              ? baseline.sourcePrompt
+              : `创建“${baseline.name}”。仅 P 挡且车速为 0，${signalLabels[baseline.trigger.signal].label}${baseline.trigger.operator === 'gt' ? '高于' : '低于'} ${baseline.trigger.threshold}${signalLabels[baseline.trigger.signal].unit}连续 ${baseline.trigger.holdSeconds} 秒，依次执行：${baseline.actions.map(actionLabel).join('；')}。开始行驶或触发条件失效时停止后续动作，不恢复旧值。`
+            : `只修改这两项：${expected.reminder ? reminderLabel(expected.reminder) : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}。其余字段、动作及顺序全部原样保留，不增删动作。`;
         const started = performance.now();
         let passed = false;
         let error: string | undefined;
@@ -49,6 +77,7 @@ batch: for (const model of models) {
         let headersMs: number | undefined;
         let status: number | undefined;
         let requests = 0;
+        let preview: { status: string; reminderTime: number; seatGuard: boolean } | undefined;
         let captured: Promise<string> | undefined;
         let contentType = '';
         try {
@@ -79,12 +108,9 @@ batch: for (const model of models) {
           if (intent === 'create') {
             assert.deepEqual(result.draft.trigger, baseline.trigger);
             assert.deepEqual(result.draft.actions, baseline.actions);
+            assert.deepEqual(result.draft.reminder, baseline.reminder);
             base = result.draft;
           } else {
-            const expected = structuredClone(base);
-            expected.trigger.holdSeconds += 2;
-            expected.actions.find((action) => action.capability === numeric.capability)!.value =
-              changed;
             assert.deepEqual(
               {
                 ...result.draft,
@@ -95,6 +121,7 @@ batch: for (const model of models) {
               expected,
             );
           }
+          if (expected.reminder) preview = verifyPreview(result.draft, expected);
           passed = true;
         } catch (failure) {
           error =
@@ -135,6 +162,7 @@ batch: for (const model of models) {
           headersMs,
           status,
           requests,
+          preview,
           error,
           detail,
         };
@@ -171,3 +199,40 @@ for (const model of models) {
   );
 }
 if (records.some((row) => !row.passed)) process.exitCode = 1;
+
+function verifyPreview(draft: Scenario, expected: Scenario) {
+  const scene = { ...draft, confirmed: true };
+  const initial = previewVehicle(expected);
+  const reminder = expected.reminder!;
+  const readyAt = expected.trigger.holdSeconds + expected.actions.length;
+  const seat = expected.actions.find((action) => action.capability === 'seat.recline');
+  assert.ok(seat);
+  const runtime = new CabinRuntime(scene, initial);
+  const ready = runtime.advanceTo(readyAt);
+  assert.equal(ready.status, 'waiting');
+  assert.equal(
+    ready.vehicle[seat.seat === 'driver' ? 'driverRecline' : 'passengerRecline'],
+    seat.value,
+  );
+  const before =
+    reminder.kind === 'wake'
+      ? runtime.advanceTo(readyAt + reminder.afterSeconds - 1)
+      : runtime.setSignals({ batteryPercent: reminder.atPercent - 1 });
+  assert.ok(!before.events.some((event) => event.kind === 'reminder'));
+  const complete =
+    reminder.kind === 'wake'
+      ? runtime.step()
+      : runtime.setSignals({ batteryPercent: reminder.atPercent });
+  assert.equal(complete.status, 'completed');
+  assert.equal(complete.events.filter((event) => event.kind === 'reminder').length, 1);
+  assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
+  const empty = new CabinRuntime(scene, {
+    ...initial,
+    driverOccupied: seat.seat !== 'driver',
+    passengerOccupied: seat.seat !== 'passenger',
+  }).advanceTo(readyAt);
+  assert.ok(
+    !empty.events.some((event) => event.kind === 'accepted' && event.capability === 'seat.recline'),
+  );
+  return { status: complete.status, reminderTime: complete.time, seatGuard: true };
+}

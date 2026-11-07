@@ -16,8 +16,15 @@ for (const id of Object.keys(templates) as TemplateId[]) {
   const scenario = cloneTemplate(id);
   const initial = previewVehicle(scenario);
   const capability = scenario.actions[0].capability;
+  const finish = (runtime: CabinRuntime) => {
+    const snapshot = runtime.step(90);
+    if (snapshot.reminderDueAt !== undefined) return runtime.advanceTo(snapshot.reminderDueAt);
+    if (scenario.reminder?.kind === 'charge')
+      return runtime.setSignals({ batteryPercent: scenario.reminder.atPercent });
+    return snapshot;
+  };
   test(`${id} 请求被拒绝，不得记为接受或达成，导出结果可独立复核`, () => {
-    const result = new CabinRuntime(scenario, initial, `${capability}:rejected`).step(90);
+    const result = finish(new CabinRuntime(scenario, initial, `${capability}:rejected`));
     assert.equal(result.status, 'partial');
     assert.equal(result.events.filter((event) => event.kind === 'rejected').length, 1);
     assert.equal(
@@ -31,7 +38,7 @@ for (const id of Object.keys(templates) as TemplateId[]) {
   });
   test(`${id} 回读丢失保留最后已知状态，不再控制同一设备`, () => {
     const runtime = new CabinRuntime(scenario, initial, `${capability}:feedback-lost`);
-    const result = runtime.step(90);
+    const result = finish(runtime);
     assert.equal(result.status, 'uncertain');
     const unknown = result.events.filter((event) => event.kind === 'unknown');
     const accepted = result.events.filter(

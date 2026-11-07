@@ -1,4 +1,4 @@
-import { actionLabel, signalLabels, type Scenario } from './scenario';
+import { actionLabel, reminderLabel, signalLabels, type Scenario } from './scenario';
 import { verifyScenario } from './verification';
 
 export interface ScenarioChange {
@@ -32,6 +32,7 @@ export function scenarioChanges(before: Scenario, after: Scenario): ScenarioChan
   );
   add('持续时间', `${before.trigger.holdSeconds} 秒`, `${after.trigger.holdSeconds} 秒`);
   add('动作超时', `${before.timeoutSeconds} 秒`, `${after.timeoutSeconds} 秒`);
+  add('提醒', reminderLabel(before.reminder), reminderLabel(after.reminder));
   for (let index = 0; index < Math.max(before.actions.length, after.actions.length); index++)
     add(
       `第 ${index + 1} 个动作`,

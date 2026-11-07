@@ -19,12 +19,32 @@ export const actionSchema = z.discriminatedUnion('capability', [
   z
     .object({ capability: z.literal('ambient.light'), value: z.number().int().min(0).max(100) })
     .strict(),
+  z
+    .object({
+      capability: z.literal('seat.recline'),
+      seat: z.enum(['driver', 'passenger']),
+      value: z.number().int().min(0).max(45),
+    })
+    .strict(),
+]);
+export const reminderSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('wake'), afterSeconds: z.number().int().min(1).max(1800) }).strict(),
+  z.object({ kind: z.literal('charge'), atPercent: z.number().int().min(1).max(100) }).strict(),
 ]);
 export const scenarioSchema = z
   .object({
     schemaVersion: z.literal(1),
     id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),
-    templateId: z.enum(['rest', 'reading', 'refresh', 'warmup', 'cooldown', 'night']),
+    templateId: z.enum([
+      'rest',
+      'reading',
+      'refresh',
+      'warmup',
+      'cooldown',
+      'night',
+      'nap',
+      'charging',
+    ]),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
     sourcePrompt: z.string().min(1).max(2000),
@@ -32,7 +52,7 @@ export const scenarioSchema = z
     confirmed: z.boolean(),
     trigger: z
       .object({
-        signal: z.enum(['temperature', 'illuminance', 'co2']),
+        signal: z.enum(['temperature', 'illuminance', 'co2', 'batteryPercent']),
         operator: z.enum(['gt', 'lt']),
         threshold: z.number().min(-50).max(10000),
         holdSeconds: z
@@ -45,6 +65,7 @@ export const scenarioSchema = z
       .strict(),
     guard: z.literal('parked'),
     actions: z.array(actionSchema).min(1).max(8),
+    reminder: reminderSchema.optional(),
     exit: z.literal('cancel-pending-no-restore'),
     timeoutSeconds: z
       .number()
@@ -61,7 +82,8 @@ export const scenarioSchema = z
 export type Scenario = z.infer<typeof scenarioSchema>;
 export type Action = z.infer<typeof actionSchema>;
 export type Capability = Action['capability'];
-export type Resource = 'climate' | 'media' | 'ambient';
+export const resourceSchema = z.enum(['climate', 'media', 'ambient', 'seat']);
+export type Resource = z.infer<typeof resourceSchema>;
 export type TemplateId = Scenario['templateId'];
 
 export const catalog: Record<
@@ -139,15 +161,35 @@ export const catalog: Record<
     result: '灯光亮度回读',
     boundary: '仅模拟亮度；参考工程的阅读灯开关不能等同于亮度调节。',
   },
+  'seat.recline': {
+    label: '座椅后仰角度',
+    unit: '°',
+    range: '0–45°，座位 seat 为 driver（主驾）或 passenger（副驾）',
+    precondition: '停车且对应座位明确有人，执行前再次检查',
+    result: '模拟座椅后仰角度回读',
+    boundary: '只模拟前排座椅；角度不代表实车行程或防夹能力。',
+  },
 };
 
 export const signalLabels = {
   temperature: { label: '车内温度', unit: '°C', min: 16, max: 40 },
   illuminance: { label: '环境照度', unit: 'lx', min: 0, max: 300 },
   co2: { label: 'CO₂ 浓度', unit: 'ppm', min: 400, max: 2000 },
+  batteryPercent: { label: '电池电量', unit: '%', min: 0, max: 100 },
 };
 
+export const seatLabels = { driver: '主驾', passenger: '副驾' };
+
+export function reminderLabel(reminder: Scenario['reminder']): string {
+  if (!reminder) return '无提醒';
+  return reminder.kind === 'wake'
+    ? `准备完成后 ${reminder.afterSeconds} 秒唤醒`
+    : `充电达到 ${reminder.atPercent}% 时提醒`;
+}
+
 export function actionLabel(action: Action): string {
+  if (action.capability === 'seat.recline')
+    return `${seatLabels[action.seat]}座椅后仰 · ${action.value}°`;
   const value =
     typeof action.value === 'boolean'
       ? action.value
@@ -185,6 +227,12 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
   if (seen.has('media.play') && seen.has('media.pause'))
     errors.push('同一场景不能同时播放与暂停媒体');
   const { signal, threshold } = scenario.trigger;
+  if (scenario.templateId === 'nap' && scenario.reminder?.kind !== 'wake')
+    errors.push('定时午休必须设置唤醒计时');
+  if (scenario.templateId === 'charging' && scenario.reminder?.kind !== 'charge')
+    errors.push('充电等候必须设置目标电量提醒');
+  if (scenario.reminder?.kind === 'charge' && signal !== 'batteryPercent')
+    errors.push('充电提醒的触发信号必须为电池电量');
   const bounds = signalLabels[signal];
   if (threshold < bounds.min || threshold > bounds.max)
     errors.push(`${bounds.label}阈值超出模拟范围`);

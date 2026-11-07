@@ -31,11 +31,11 @@ test('增加场景族时保留用户旧版本，只补齐缺失模板', () => {
   });
 });
 
-test('六个场景族可保存超过旧版 90 条的历史，未确认与非法场景仍不加载', () => {
+test('多个场景族可保存超过旧版 90 条的历史，未确认与非法场景仍不加载', () => {
   const saved = Object.values(templates).flatMap((template) =>
     Array.from({ length: 20 }, (_, index) => ({ ...template, version: index + 1 })),
   );
-  withStoredVersions(saved, () => assert.equal(readVersions().length, 120));
+  withStoredVersions(saved, () => assert.equal(readVersions().length, saved.length));
   withStoredVersions([{ ...cloneTemplate('rest'), confirmed: false }, { id: 'invalid' }], () => {
     assert.deepEqual(readVersions(), Object.values(templates));
   });

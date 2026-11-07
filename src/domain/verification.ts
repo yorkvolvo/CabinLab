@@ -1,6 +1,7 @@
 import {
   CabinRuntime,
   initialVehicle,
+  previewVehicle,
   replayEvidence,
   type RunSnapshot,
   type Vehicle,
@@ -48,6 +49,8 @@ const actionsMatch = (s: RunSnapshot, action: Action) => {
       return v.volume === action.value;
     case 'ambient.light':
       return v.light === action.value;
+    case 'seat.recline':
+      return (action.seat === 'driver' ? v.driverRecline : v.passengerRecline) === action.value;
   }
 };
 
@@ -58,7 +61,9 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
   const signal = baseline.trigger.signal;
   const inactive = baseline.trigger.threshold + (baseline.trigger.operator === 'gt' ? -2 : 2);
   const active = baseline.trigger.threshold + (baseline.trigger.operator === 'gt' ? 2 : -2);
-  const initial: Vehicle = { ...initialVehicle, [signal]: active };
+  const initial: Vehicle = baseline.reminder
+    ? previewVehicle(baseline)
+    : { ...initialVehicle, [signal]: active };
   const cases: VerificationCase[] = [];
   let latest: CabinRuntime | undefined;
   const create = (v = initial) => {
@@ -82,6 +87,129 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
       });
     }
   };
+
+  const reminder = baseline.reminder;
+  if (reminder) {
+    const readyTime = hold + baseline.actions.length;
+    const atDue = (run: CabinRuntime) =>
+      reminder.kind === 'wake'
+        ? run.advanceTo(readyTime + reminder.afterSeconds)
+        : run.setSignals({ batteryPercent: reminder.atPercent });
+    test('preparation', '准备动作达到固定状态，提醒尚未触发', '准备与提醒', () => {
+      const s = create().advanceTo(readyTime);
+      expect(s.status === 'waiting', '准备完成后未进入提醒等待');
+      expect(
+        baseline.actions.every((action) => actionsMatch(s, action)),
+        '准备动作与产品基线不符',
+      );
+      expect(count(s, 'reminder') === 0, '提醒提前触发');
+      return '座椅和舒适动作已回读，提醒独立等待';
+    });
+    test('boundary', '只在固定计时或目标电量边界提醒', '准备与提醒', () => {
+      const r = create();
+      r.advanceTo(readyTime);
+      const before =
+        reminder.kind === 'wake'
+          ? r.advanceTo(readyTime + reminder.afterSeconds - 1)
+          : r.setSignals({ batteryPercent: reminder.atPercent - 1 });
+      expect(count(before, 'reminder') === 0, '尚未达到固定边界就提醒');
+      const after = atDue(r);
+      expect(
+        count(after, 'reminder') === 1 && after.status === 'completed',
+        '达到固定边界未完成一次提醒',
+      );
+      return '恰好达到时间或电量边界时提醒';
+    });
+    test('once', '后续信号与时间推进不重复提醒', '准备与提醒', () => {
+      const r = create();
+      r.advanceTo(readyTime);
+      expect(count(atDue(r), 'reminder') === 1, '未触发首个提醒');
+      r.step(10);
+      const after = r.setSignals({ batteryPercent: 100 });
+      expect(count(after, 'reminder') === 1, '提醒重复触发');
+      return '一次预演最多发出一次提醒';
+    });
+    test('empty-seat', '主驾空置时不发送座椅请求', '占用守卫', () => {
+      const s = create({ ...initial, driverOccupied: false, passengerOccupied: true }).advanceTo(
+        readyTime,
+      );
+      expect(
+        !s.events.some((event) => event.kind === 'accepted' && event.capability === 'seat.recline'),
+        '空置主驾收到座椅请求',
+      );
+      expect(
+        s.vehicle.driverRecline === 0 && s.vehicle.climatePower,
+        '空置座椅改变或独立空调动作未继续',
+      );
+      return '副驾有人不能替代主驾占用，其他动作可继续';
+    });
+    test('seat-loss', '座椅请求后离座，取消在途动作', '占用守卫', () => {
+      const r = create();
+      expect(r.advanceTo(hold).pending === 'seat.recline', '未进入座椅在途状态');
+      r.setSignals({ driverOccupied: false });
+      const s = r.advanceTo(readyTime + 10);
+      expect(s.vehicle.driverRecline === 0 && count(s, 'cancelled') > 0, '离座后未取消座椅动作');
+      return '回读前重新检查占用，无迟到动作';
+    });
+    test(
+      'interrupt',
+      reminder.kind === 'wake' ? '离座取消唤醒' : '拔枪取消提醒',
+      '退出守卫',
+      () => {
+        const r = create();
+        expect(r.advanceTo(readyTime).status === 'waiting', '未进入等待提醒状态');
+        r.setSignals(reminder.kind === 'wake' ? { driverOccupied: false } : { charging: false });
+        const s = atDue(r);
+        expect(s.status === 'stopped' && count(s, 'reminder') === 0, '失效后仍然提醒');
+        return '条件退出清除等待，不回滚已完成动作';
+      },
+    );
+    test('park', '驶离取消等待中的提醒', '退出守卫', () => {
+      const r = create();
+      r.advanceTo(readyTime);
+      r.setSignals({ gear: 'D' });
+      const s = atDue(r);
+      expect(s.status === 'stopped' && count(s, 'reminder') === 0, '驶离后仍然提醒');
+      return '停车守卫贯穿等待阶段';
+    });
+    test('cancel', '手动停止不会留下提醒', '退出守卫', () => {
+      const r = create();
+      r.advanceTo(readyTime);
+      r.cancel();
+      const s = atDue(r);
+      expect(
+        s.status === 'cancelled' && count(s, 'reminder') === 0 && s.reminderDueAt === undefined,
+        '停止后仍保留提醒',
+      );
+      return '停止清除计时，后续输入不重启';
+    });
+    test('replay', '提醒与输入轨迹独立重放一致', '证据', () => {
+      const r = create();
+      r.advanceTo(readyTime);
+      const s = atDue(r);
+      const replayed = replayEvidence(s).snapshot();
+      expect(
+        count(s, 'reminder') === 1 && JSON.stringify(s.events) === JSON.stringify(replayed.events),
+        '提醒轨迹未一致重放',
+      );
+      return '虚拟时间、座椅回读与提醒均可复现';
+    });
+    if (reminder.kind === 'charge')
+      test('plug', '未插枪等待，接通后才执行', '退出守卫', () => {
+        const r = create({ ...initial, charging: false });
+        expect(count(r.step(10), 'accepted') === 0, '未插枪就发出准备动作');
+        expect(count(r.setSignals({ charging: true }), 'accepted') === 1, '接通后没有开始准备');
+        return '插枪为显式模拟输入，缺失或断开不执行';
+      });
+    return {
+      scenario: structuredClone(scenario),
+      contractVersion: '1.1',
+      baseline: `${baseline.name} · 固定提醒基线 v1`,
+      passed: cases.filter((c) => c.passed).length,
+      total: cases.length,
+      cases,
+    };
+  }
 
   test('normal', '持续满足后，所有目标状态达成', '正常路径', () => {
     const s = create().step(90);

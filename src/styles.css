@@ -1549,6 +1549,23 @@ main {
   line-height: 1.6;
   border-top: 1px solid #26343a;
 }
+.reminder-controls,
+.reminder-wait {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.reminder-controls {
+  margin-top: 12px;
+  color: #a9c0c1;
+  font-size: 11px;
+}
+.reminder-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .run-status {
   display: flex;
   justify-content: space-between;
