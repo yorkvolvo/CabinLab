@@ -80,6 +80,7 @@ const evidenceSchema = z
     locked: z.array(resourceSchema).max(resourceSchema.options.length),
     pending: capabilitySchema.optional(),
     reminderDueAt: timeSchema.optional(),
+    petWarnings: z.array(z.string().min(1).max(100)).max(3).optional(),
   })
   .strict();
 
@@ -169,6 +170,7 @@ export function inspectEvidence(text: string): { source: RunSnapshot; replayed: 
     'locked',
     'pending',
     'reminderDueAt',
+    'petWarnings',
     'caveat',
   ] as const;
   const mismatch = fields.filter((key) => canonical(source[key]) !== canonical(replayed[key]));

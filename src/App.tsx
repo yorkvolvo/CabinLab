@@ -83,6 +83,7 @@ const icons = {
   rainClose: CloudRain,
   petWait: PawPrint,
   rainMirror: CloudRain,
+  rainLink: CloudRain,
 };
 const eventLabels = {
   armed: '就绪',
@@ -146,6 +147,7 @@ export default function App() {
   );
   const hasWindowAction = scenario.actions.some((action) => action.capability === 'window.close');
   const latestReminder = snapshot?.events.filter((event) => event.kind === 'reminder').at(-1);
+  const petWarnings = snapshot?.petWarnings;
   const active = snapshot && !isTerminal(snapshot.status);
   const draftErrors = draft ? validateScenario(draft).errors : [];
   const manualLight = selected.actions.some((action) => action.capability === 'ambient.light');
@@ -1519,7 +1521,12 @@ export default function App() {
                         )}
                       </div>
                     )}
-                    {latestReminder && (
+                    {Boolean(petWarnings?.length) && (
+                      <p className="feedback-warning" role="status">
+                        宠物留舱提醒：{petWarnings?.join('，')}
+                      </p>
+                    )}
+                    {petWarnings === undefined && latestReminder && (
                       <p className="feedback-warning" role="alert">
                         {latestReminder.detail}
                       </p>
@@ -1529,7 +1536,11 @@ export default function App() {
                         <span
                           className={`live-dot ${snapshot?.status === 'partial' || snapshot?.status === 'uncertain' ? 'amber' : ''}`}
                         />
-                        {snapshot ? statusLabels[snapshot.status] : '准备就绪'}
+                        {snapshot?.status === 'waiting' && petWarnings
+                          ? '宠物监测中'
+                          : snapshot
+                            ? statusLabels[snapshot.status]
+                            : '准备就绪'}
                         {active && !playing ? ' · 已暂停' : ''}
                       </span>
                       <span>

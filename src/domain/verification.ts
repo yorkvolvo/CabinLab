@@ -187,11 +187,31 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
       );
       const s = r.setSignals({ temperature: reminder.maxTemperature });
       expect(countAlerts(s) === 1 && countAlerts(r.step(10)) === 1, '未在阈值提醒或重复提醒');
+      expect(s.status === 'waiting', '提醒后监测已结束');
       expect(
         JSON.stringify(replayEvidence(s).snapshot().events) === JSON.stringify(s.events),
         '重放不一致',
       );
       return '温度边界和提醒可重放';
+    });
+    test('monitor-after-warning', '持续异常只提醒一次，恢复后可重新提醒', '监测', () => {
+      const r = monitor();
+      r.setSignals({ temperature: reminder.maxTemperature });
+      const battery = r.setSignals({ batteryPercent: reminder.minBatteryPercent });
+      expect(battery.status === 'waiting' && countAlerts(battery) === 2, '新增低电量未单独提醒');
+      expect(
+        battery.events.filter((e) => e.kind === 'reminder').at(-1)?.detail ===
+          `宠物留舱提醒：电量降至 ${reminder.minBatteryPercent}%`,
+        '重复报告了持续高温',
+      );
+      const recovered = r.setSignals({
+        temperature: reminder.maxTemperature - 1,
+        batteryPercent: reminder.minBatteryPercent + 1,
+      });
+      expect(recovered.petWarnings?.length === 0, '恢复后仍显示异常');
+      const again = r.setSignals({ temperature: reminder.maxTemperature });
+      expect(again.status === 'waiting' && countAlerts(again) === 3, '恢复后再次异常未重新提醒');
+      return '异常分开去重，恢复清除当前状态，历史仍可复核';
     });
     test('battery', '低电量或电量未知时提醒', '监测', () => {
       const r = monitor();
@@ -214,8 +234,11 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
       latest = new CabinRuntime(scenario, initial, 'climate.power:feedback-lost');
       latest.setSignals({ petPresent: true });
       const s = latest.step(60);
-      expect(s.status === 'uncertain' && countAlerts(s) === 1, '空调未知未提醒');
-      return '空调未确认时保留未知结果并提示';
+      expect(
+        s.status === 'waiting' && count(s, 'unknown') === 1 && countAlerts(s) === 1,
+        '空调未知未提醒或监测已停止',
+      );
+      return '空调未确认时提示一次，监测继续';
     });
     test('exit', '离舱或驶离后结束监测', '运行守卫', () => {
       for (const patch of [{ petPresent: false }, { gear: 'D' }] as const) {

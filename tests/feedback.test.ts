@@ -31,7 +31,8 @@ for (const id of Object.keys(templates) as TemplateId[]) {
   };
   test(`${id} 请求被拒绝，不得记为接受或达成，导出结果可独立复核`, () => {
     const result = finish(new CabinRuntime(scenario, initial, `${capability}:rejected`));
-    assert.equal(result.status, 'partial');
+    const status = id === 'petWait' ? 'waiting' : 'partial';
+    assert.equal(result.status, status);
     assert.equal(result.events.filter((event) => event.kind === 'rejected').length, 1);
     assert.equal(
       result.events.some(
@@ -40,12 +41,13 @@ for (const id of Object.keys(templates) as TemplateId[]) {
       ),
       false,
     );
-    assert.equal(inspectEvidence(JSON.stringify(result)).replayed.status, 'partial');
+    assert.equal(inspectEvidence(JSON.stringify(result)).replayed.status, status);
   });
   test(`${id} 回读丢失保留最后已知状态，不再控制同一设备`, () => {
     const runtime = new CabinRuntime(scenario, initial, `${capability}:feedback-lost`);
     const result = finish(runtime);
-    assert.equal(result.status, 'uncertain');
+    const status = id === 'petWait' ? 'waiting' : 'uncertain';
+    assert.equal(result.status, status);
     const unknown = result.events.filter((event) => event.kind === 'unknown');
     const accepted = result.events.filter(
       (event) => event.kind === 'accepted' && event.capability === capability,
@@ -61,10 +63,27 @@ for (const id of Object.keys(templates) as TemplateId[]) {
       ),
       false,
     );
-    assert.equal(inspectEvidence(JSON.stringify(result)).replayed.status, 'uncertain');
-    assert.deepEqual(runtime.step(90), result);
+    assert.equal(inspectEvidence(JSON.stringify(result)).replayed.status, status);
+    const next = runtime.step(90);
+    if (id === 'petWait') assert.deepEqual(next.events, result.events);
+    else assert.deepEqual(next, result);
   });
 }
+
+test('雨天联动中窗路受阻或空调开启失败时，独立设备仍然完成', () => {
+  const scenario = cloneTemplate('rainLink');
+  const initial = previewVehicle(scenario);
+  const blocked = new CabinRuntime(scenario, { ...initial, windowPathClear: false }).step(20);
+  assert.equal(blocked.status, 'partial');
+  assert.equal(blocked.vehicle.windowsClosed, false);
+  assert.equal(blocked.vehicle.frontDefrost, true);
+  assert.equal(blocked.vehicle.mirrorHeat, true);
+  const rejected = new CabinRuntime(scenario, initial, 'climate.power:rejected').step(20);
+  assert.equal(rejected.status, 'partial');
+  assert.equal(rejected.vehicle.windowsClosed, true);
+  assert.equal(rejected.vehicle.frontDefrost, false);
+  assert.equal(rejected.vehicle.mirrorHeat, true);
+});
 
 test('关窗前或在途无法确认窗路安全时，不产生全闭回读且结果可重放', () => {
   const scenario = cloneTemplate('rainClose');

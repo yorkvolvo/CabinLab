@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.5.0"
+    assert unknown["runtimeVersion"] == "1.6.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -364,21 +364,38 @@ with sync_playwright() as p:
     passed("雨量严格阈值、在途障碍取消及四窗全闭回读")
 
     select_template("宠物留舱")
+    tones_before_pet = page.evaluate("window.reminderTones")
     steps(3)
     expect(page.locator(".run-status")).to_contain_text("等待触发")
     page.get_by_role("checkbox", name="确认宠物在舱").check()
     steps(5)
-    expect(page.locator(".run-status")).to_contain_text("等待提醒")
-    page.get_by_role("slider", name="模拟舱温").fill("29")
-    expect(page.get_by_role("alert")).to_have_count(0)
-    page.get_by_role("slider", name="模拟舱温").fill("30")
-    expect(page.get_by_role("alert")).to_contain_text("舱温达到 30°C")
+    expect(page.locator(".run-status")).to_contain_text("宠物监测中")
+    temperature = page.get_by_role("slider", name="模拟舱温")
+    battery = page.get_by_role("slider", name="模拟电量")
+    pet_warning = page.locator("p.feedback-warning").filter(has_text="宠物留舱提醒")
+    temperature.fill("29")
+    expect(pet_warning).to_have_count(0)
+    temperature.fill("30")
+    expect(pet_warning).to_contain_text("舱温达到 30°C")
+    page.wait_for_function("expected => window.reminderTones === expected", arg=tones_before_pet + 2)
+    steps(6)
+    assert page.evaluate("window.reminderTones") == tones_before_pet + 2
+    battery.fill("20")
+    expect(pet_warning).to_contain_text("电量降至 20%")
+    page.wait_for_function("expected => window.reminderTones === expected", arg=tones_before_pet + 4)
+    temperature.fill("29")
+    battery.fill("21")
+    expect(pet_warning).to_have_count(0)
+    temperature.fill("30")
+    page.wait_for_function("expected => window.reminderTones === expected", arg=tones_before_pet + 6)
     pet = export_run("run-pet-monitor.json")
     assert pet["vehicle"]["climatePower"] and pet["vehicle"]["targetTemperature"] == 24
-    assert sum(e["kind"] == "reminder" for e in pet["events"]) == 1
+    assert pet["status"] == "waiting"
+    assert sum(e["kind"] == "reminder" for e in pet["events"]) == 3
     page.get_by_role("button", name="重放执行证据", exact=True).click()
-    expect(page.get_by_role("alert")).to_contain_text("舱温达到 30°C")
-    passed("宠物在舱确认、空调准备、高温阈值与提醒重放")
+    expect(pet_warning).to_contain_text("舱温达到 30°C")
+    assert page.evaluate("window.reminderTones") == tones_before_pet + 6
+    passed("宠物提醒后继续监测，持续异常无重复提示，恢复后再触发且重放静音")
 
     select_template("雨天后视镜加热")
     slider.fill("1")
@@ -392,6 +409,22 @@ with sync_playwright() as p:
     assert export_run("run-mirror-heat.json")["vehicle"]["mirrorHeat"] is True
     passed("雨天后视镜加热的严格雨量阈值与开关回读")
 
+    select_template("雨天联动")
+    steps(9)
+    linked = export_run("run-rain-link.json")
+    assert linked["status"] == "completed"
+    assert [e["capability"] for e in linked["events"] if e["kind"] == "confirmed"] == [
+        "window.close", "climate.power", "climate.frontDefrost", "mirror.heat",
+    ]
+    assert all(linked["vehicle"][key] for key in ["windowsClosed", "frontDefrost", "mirrorHeat"])
+    select_template("雨天联动")
+    page.get_by_role("checkbox", name="窗路无障碍").uncheck()
+    steps(9)
+    obstructed = export_run("run-rain-link-obstructed.json")
+    assert obstructed["status"] == "partial" and not obstructed["vehicle"]["windowsClosed"]
+    assert obstructed["vehicle"]["frontDefrost"] and obstructed["vehicle"]["mirrorHeat"]
+    passed("雨天联动依次回读，关窗遇阻时仍执行独立的除雾和加热")
+
     migration_context = browser.new_context()
     old_versions = [
         {**successful["scenario"], "version": 7, "name": "我保存的午休"},
@@ -401,7 +434,7 @@ with sync_playwright() as p:
     migration_page = migration_context.new_page()
     migration_page.goto(BASE_URL)
     expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
-    assert migration_page.locator(".scenario-nav").count() == 14
+    assert migration_page.locator(".scenario-nav").count() == 15
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
@@ -602,7 +635,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
-    assert page.locator(".scenario-nav").count() == 14
+    assert page.locator(".scenario-nav").count() == 15
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

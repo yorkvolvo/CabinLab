@@ -89,7 +89,15 @@ export const faultSchema = z.enum([
     return [capability, `${capability}:rejected`, `${capability}:feedback-lost`] as const;
   }),
 ]);
-export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0']);
+export const runtimeVersionSchema = z.enum([
+  '1.0.0',
+  '1.1.0',
+  '1.2.0',
+  '1.3.0',
+  '1.4.0',
+  '1.5.0',
+  '1.6.0',
+]);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
   | 'armed'
@@ -164,6 +172,7 @@ export interface RunSnapshot extends RunEvidence {
   locked: Resource[];
   pending?: Capability;
   reminderDueAt?: number;
+  petWarnings?: string[];
 }
 
 export const initialVehicle: Vehicle = {
@@ -259,6 +268,7 @@ export class CabinRuntime {
   private locked = new Set<Resource>();
   private uncertain = new Set<Resource>();
   private reminderDueAt?: number;
+  private petWarnings: string[] = [];
   private departure: 'unseen' | 'seated' | 'doorOpen' | 'exited' = 'unseen';
 
   constructor(
@@ -266,7 +276,7 @@ export class CabinRuntime {
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.5.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.6.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -305,7 +315,7 @@ export class CabinRuntime {
     )
       throw new Error('旧运行时不支持主驾离车或车窗关闭');
     if (
-      runtimeVersion !== '1.5.0' &&
+      !this.supportsPetMirror &&
       (this.scenario.trigger.signal === 'petPresent' ||
         this.scenario.templateId === 'rainMirror' ||
         this.scenario.actions.some((action) => action.capability === 'mirror.heat') ||
@@ -314,6 +324,8 @@ export class CabinRuntime {
         fault.startsWith('mirror.'))
     )
       throw new Error('旧运行时不支持宠物监测或后视镜加热');
+    if (runtimeVersion !== '1.6.0' && this.scenario.templateId === 'rainLink')
+      throw new Error('旧运行时不支持雨天联动');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
     this.log('armed', `场景 v${scenario.version} 已就绪；只运行一次，退出时不恢复设备状态`);
@@ -340,7 +352,11 @@ export class CabinRuntime {
   }
 
   private get supportsDepartureWindow(): boolean {
-    return this.runtimeVersion === '1.4.0' || this.runtimeVersion === '1.5.0';
+    return this.runtimeVersion === '1.4.0' || this.supportsPetMirror;
+  }
+
+  private get supportsPetMirror(): boolean {
+    return this.runtimeVersion === '1.5.0' || this.runtimeVersion === '1.6.0';
   }
 
   private observeDeparture() {
@@ -523,7 +539,13 @@ export class CabinRuntime {
       if (this.vehicle.batteryPercent === undefined) warnings.push('电量未知');
       else if (this.vehicle.batteryPercent <= reminder.minBatteryPercent)
         warnings.push(`电量降至 ${reminder.minBatteryPercent}%`);
-      if (warnings.length) this.emitReminder(`宠物留舱提醒：${warnings.join('，')}`);
+      if (this.runtimeVersion === '1.5.0') {
+        if (warnings.length) this.emitReminder(`宠物留舱提醒：${warnings.join('，')}`);
+        return;
+      }
+      const newWarnings = warnings.filter((warning) => !this.petWarnings.includes(warning));
+      this.petWarnings = warnings;
+      if (newWarnings.length) this.log('reminder', `宠物留舱提醒：${newWarnings.join('，')}`);
       return;
     }
     if (reminder.kind === 'wake' && this.vehicle.driverOccupied !== true) {
@@ -650,7 +672,7 @@ export class CabinRuntime {
       (!this.supportsReminders && reminderVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsRainPickup && rainPickupVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsDepartureWindow && departureWindowKeys.some((key) => key in allowed)) ||
-      (this.runtimeVersion !== '1.5.0' && 'petPresent' in allowed)
+      (!this.supportsPetMirror && 'petPresent' in allowed)
     )
       throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
@@ -682,10 +704,7 @@ export class CabinRuntime {
         this.vehicle.windowPathClear !== true)
     )
       throw new Error('必须停车且确认窗路无障碍，才允许关闭车窗');
-    if (
-      action.capability === 'mirror.heat' &&
-      (this.runtimeVersion !== '1.5.0' || !isParked(this.vehicle))
-    )
+    if (action.capability === 'mirror.heat' && (!this.supportsPetMirror || !isParked(this.vehicle)))
       throw new Error('当前运行时或停车条件不允许操作后视镜加热');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
     const resource = resourceOf(action.capability);
@@ -702,6 +721,12 @@ export class CabinRuntime {
       this.failures++;
       this.nextAction();
     }
+    if (
+      this.runtimeVersion === '1.6.0' &&
+      this.status === 'waiting' &&
+      this.scenario.reminder?.kind === 'pet'
+    )
+      this.checkReminder();
     return this.snapshot();
   }
 
@@ -742,6 +767,9 @@ export class CabinRuntime {
       locked: [...this.locked],
       pending: this.pending?.action.capability,
       ...(this.reminderDueAt === undefined ? {} : { reminderDueAt: this.reminderDueAt }),
+      ...(this.runtimeVersion === '1.6.0' && this.scenario.reminder?.kind === 'pet'
+        ? { petWarnings: this.status === 'waiting' ? this.petWarnings : [] }
+        : {}),
       caveat: '仅表示当前虚拟车辆模型中的状态回读，不构成真车验收或安全认证。',
     });
   }

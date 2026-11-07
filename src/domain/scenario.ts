@@ -60,6 +60,7 @@ export const scenarioSchema = z
       'rainClose',
       'petWait',
       'rainMirror',
+      'rainLink',
     ]),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
@@ -305,6 +306,8 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
     errors.push('雨天自动关窗必须使用模拟雨量等级高于阈值');
   if (scenario.templateId === 'rainMirror' && (signal !== 'rainLevel' || operator !== 'gt'))
     errors.push('雨天后视镜加热必须使用模拟雨量等级高于阈值');
+  if (scenario.templateId === 'rainLink' && (signal !== 'rainLevel' || operator !== 'gt'))
+    errors.push('雨天联动必须使用模拟雨量等级高于阈值');
   if (
     (scenario.templateId === 'petWait' ||
       signal === 'petPresent' ||
@@ -319,7 +322,8 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
   if (
     (scenario.templateId === 'passengerWait' ||
       scenario.templateId === 'rainClose' ||
-      scenario.templateId === 'rainMirror') &&
+      scenario.templateId === 'rainMirror' ||
+      scenario.templateId === 'rainLink') &&
     scenario.reminder
   )
     errors.push('该场景使用原触发条件退出，不支持附加提醒');

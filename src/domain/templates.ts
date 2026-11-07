@@ -214,6 +214,22 @@ export const templates: Record<TemplateId, Scenario> = {
     trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
     actions: [{ capability: 'mirror.heat', value: true }],
   },
+  rainLink: {
+    ...base,
+    id: 'rainLink',
+    templateId: 'rainLink',
+    name: '雨天联动',
+    description: '一次预演依次处理关窗、前挡除雾与外后视镜加热。',
+    sourcePrompt:
+      '创建「雨天联动」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后依次执行：关闭四门车窗；开启空调电源；开启前挡除雾；开启外后视镜加热。关窗遇阻时继续独立动作，驶离或雨量条件失效时停止尚未完成的动作，保留已完成状态。',
+    trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
+    actions: [
+      { capability: 'window.close', value: true },
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.frontDefrost', value: true },
+      { capability: 'mirror.heat', value: true },
+    ],
+  },
 };
 
 export function cloneTemplate(id: TemplateId): Scenario {
