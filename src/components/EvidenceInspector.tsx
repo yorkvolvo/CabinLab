@@ -83,6 +83,9 @@ export default function EvidenceInspector() {
               原始运行结果：<strong>{runStatusLabels[result.source.status]}</strong>
               。核验通过表示这一结果可复现，不代表所有动作成功。
             </p>
+            {result.source.events.some((event) => event.kind === 'unknown') && (
+              <p>存在结果未知的动作；设备画面为最后已知状态，不能据此认定动作未执行。</p>
+            )}
             <dl>
               <div>
                 <dt>事件一致</dt>

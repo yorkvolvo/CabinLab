@@ -82,15 +82,15 @@ export default function VersionComparison({
             </div>
             <ScenarioDiff before={before} after={scenario} />
             <p className="small muted">
-              两个版本都使用固定的模板产品基线 v1 / 断言集
-              1.0。对照版本只决定差异方向，不会成为测试答案。
+              两个版本都使用同一套固定的模板产品基线与断言。对照版本只决定差异方向，不会成为测试答案。
             </p>
             {result && (
               <div className="comparison-result" role="status">
                 <div className="comparison-stats">
                   <strong>
-                    v{before.version}：{result.previous.passed}/20 <ArrowRight size={14} /> v
-                    {scenario.version}：{result.current.passed}/20
+                    v{before.version}：{result.previous.passed}/{result.previous.total}{' '}
+                    <ArrowRight size={14} /> v{scenario.version}：{result.current.passed}/
+                    {result.current.total}
                   </strong>
                   <span className={result.regressions ? 'regression-count' : ''}>
                     新增失败 {result.regressions} 项

@@ -1,4 +1,4 @@
-import { cloneTemplate } from './templates';
+import { cloneTemplate, templates } from './templates';
 import { signalLabels, validateScenario, type Scenario } from './scenario';
 
 export class CompileError extends Error {
@@ -29,6 +29,19 @@ export function assumptionsFor(scenario: Scenario): string[] {
 }
 
 export function compileDemo(prompt: string): CompileResult {
+  const intent = prompt
+    .replace(/(?:不(?:要)?|无需)(?:恢复|还原|复原)(?:设备(?:状态)?)?/g, '')
+    .replace(/(?:我)?开始(?:开车|行驶)就(?:结束休息模式|停止这个场景|结束场景)/g, '');
+  if (/恢复|还原|复原/.test(intent))
+    throw new CompileError(
+      'unsupported_request',
+      '当前退出策略只停止在途与后续动作，不支持自动恢复设备状态。请明确是否接受此退出策略。',
+    );
+  if (/不|别|无需|禁止|取消|停止|结束/.test(intent))
+    throw new CompileError(
+      'needs_clarification',
+      '需求包含否定、取消或停止指令。本地模板不能可靠解释这些语义，未生成草案；请明确要保留的动作，或使用工作台的停止按钮。',
+    );
   if (/车窗|天窗|座椅|车门|后视镜|油门|刹车|制动|导航|雨刷|自动驾驶/.test(prompt))
     throw new CompileError(
       'unsupported_request',
@@ -39,20 +52,16 @@ export function compileDemo(prompt: string): CompileResult {
       'unsupported_request',
       '当前原型只支持停车场景。请明确 P 挡且车速为 0 时的需求；开始行驶会结束场景。',
     );
-  if (
-    /恢复|还原|复原/.test(prompt) &&
-    !/不(?:要)?恢复|无需恢复|不(?:要)?还原|不(?:要)?复原/.test(prompt)
-  )
-    throw new CompileError(
-      'unsupported_request',
-      '当前退出策略只停止在途与后续动作，不支持自动恢复设备状态。请明确是否接受此退出策略。',
-    );
   if (/阅读|看书|灯/.test(prompt) && /休息|降温|太热|空调|空气|外循环/.test(prompt))
     throw new CompileError(
       'needs_clarification',
       '需求涉及多个模板。本地模式不能合并这些动作，请明确选择休息、阅读或清新座舱中的一个场景。',
     );
-  if (/\d/.test(prompt))
+  if (
+    /\d/.test(prompt) ||
+    (/[零〇一二三四五六七八九十百千万两半]+\s*(?:秒|分钟|小时|度|档|摄氏度)/.test(prompt) &&
+      !Object.values(templates).some((template) => template.sourcePrompt === prompt.trim()))
+  )
     throw new CompileError(
       'needs_clarification',
       '本地模板创建不提取自定义数值。请先选择示例，再切到“修改当前场景”，例如“把持续时间改为 8 秒”；也可以直接编辑参数。',

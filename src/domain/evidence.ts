@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { actionSchema, catalog, scenarioSchema, type Capability } from './scenario';
-import { replayEvidence, vehicleSchema, type RunSnapshot } from './runtime';
+import {
+  faultSchema,
+  replayEvidence,
+  runtimeVersionSchema,
+  vehicleSchema,
+  type RunSnapshot,
+} from './runtime';
 
 export const evidenceMaxBytes = 1024 * 1024;
 const capabilitySchema = z.enum(Object.keys(catalog) as [Capability, ...Capability[]]);
@@ -12,12 +18,20 @@ const signalsSchema = vehicleSchema
 const evidenceSchema = z
   .object({
     schemaVersion: z.literal(1),
-    runtimeVersion: z.literal('1.0.0'),
+    runtimeVersion: runtimeVersionSchema,
     runId: z.string().min(1).max(256),
     scenario: scenarioSchema,
     initialState: vehicleSchema,
-    fault: z.union([capabilitySchema, z.literal('none')]),
-    status: z.enum(['armed', 'executing', 'completed', 'partial', 'stopped', 'cancelled']),
+    fault: faultSchema,
+    status: z.enum([
+      'armed',
+      'executing',
+      'completed',
+      'partial',
+      'uncertain',
+      'stopped',
+      'cancelled',
+    ]),
     time: timeSchema,
     vehicle: vehicleSchema,
     events: z
@@ -34,6 +48,8 @@ const evidenceSchema = z
               'accepted',
               'confirmed',
               'timeout',
+              'rejected',
+              'unknown',
               'blocked',
               'input',
               'manual',
@@ -109,7 +125,7 @@ export function inspectEvidence(text: string): { source: RunSnapshot; replayed: 
     !input ||
     typeof input !== 'object' ||
     !('runtimeVersion' in input) ||
-    input.runtimeVersion !== '1.0.0'
+    !runtimeVersionSchema.safeParse(input.runtimeVersion).success
   )
     throw new Error(
       '缺少或不支持的运行时版本。旧版证据请用原版本查看，或在当前版本重新运行并导出。',

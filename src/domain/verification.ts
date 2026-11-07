@@ -18,7 +18,7 @@ export interface VerificationCase {
 }
 export interface VerificationReport {
   scenario: Scenario;
-  contractVersion: '1.0';
+  contractVersion: '1.1';
   baseline: string;
   passed: number;
   total: number;
@@ -221,6 +221,44 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
       );
     return '独立动作继续，依赖动作被阻止';
   });
+  test('request-rejected', '请求拒绝不能冒充接受或达成', '异常与接管', () => {
+    const capability = baseline.actions[0].capability;
+    latest = new CabinRuntime(scenario, initial, `${capability}:rejected`);
+    const s = latest.step(90);
+    expect(count(s, 'rejected') === 1 && s.status === 'partial', '拒绝结果未正确记录');
+    expect(
+      !s.events.some(
+        (event) =>
+          event.capability === capability && ['accepted', 'confirmed'].includes(event.kind),
+      ),
+      '被拒绝的动作不应被标记为已接受或已达成',
+    );
+    return '拒绝与执行超时分开记录，不自动重试';
+  });
+  test('feedback-lost', '回读丢失标记未知并让出该设备', '异常与接管', () => {
+    const capability = baseline.actions[0].capability;
+    latest = new CabinRuntime(scenario, initial, `${capability}:feedback-lost`);
+    const s = latest.step(90);
+    const resource = resourceOf(capability);
+    expect(count(s, 'unknown') === 1 && s.status === 'uncertain', '缺少未知结果终态');
+    expect(
+      s.events.filter(
+        (event) => event.kind === 'accepted' && resourceOf(event.capability!) === resource,
+      ).length === 1,
+      '结果未知后重试或继续控制了同一设备',
+    );
+    expect(
+      baseline.actions
+        .filter((action) => resourceOf(action.capability) !== resource)
+        .every((action) => actionsMatch(s, action)),
+      '结果未知后未继续独立设备动作',
+    );
+    expect(
+      !s.events.some((event) => event.kind === 'confirmed' && event.capability === capability),
+      '丢失回读被误标为状态达成',
+    );
+    return '保留最后已知状态，不推断未执行；同一设备停止控制，独立动作继续';
+  });
   test('manual', '手动操作取得设备控制权', '异常与接管', () => {
     const r = create();
     r.step(hold);
@@ -267,7 +305,7 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
   });
   return {
     scenario: structuredClone(scenario),
-    contractVersion: '1.0',
+    contractVersion: '1.1',
     baseline: `${baseline.name} · 模板产品基线 v1（期望不会随场景修改）`,
     passed: cases.filter((c) => c.passed).length,
     total: cases.length,

@@ -1540,6 +1540,14 @@ main {
   margin-top: 4px;
   white-space: nowrap;
 }
+.feedback-warning {
+  margin: 0;
+  padding: 10px 17px;
+  color: var(--amber);
+  font-size: 11px;
+  line-height: 1.6;
+  border-top: 1px solid #26343a;
+}
 .run-status {
   display: flex;
   justify-content: space-between;
@@ -1650,10 +1658,14 @@ main {
   color: #adc78a;
 }
 .timeline-event.timeout .event-dot,
+.timeline-event.rejected .event-dot,
+.timeline-event.unknown .event-dot,
 .timeline-event.blocked .event-dot {
   background: var(--amber);
 }
 .timeline-event.timeout p,
+.timeline-event.rejected p,
+.timeline-event.unknown p,
 .timeline-event.blocked p {
   color: #c6a780;
 }

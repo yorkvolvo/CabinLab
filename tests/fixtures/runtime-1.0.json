@@ -1,0 +1,334 @@
+{
+  "schemaVersion": 1,
+  "runtimeVersion": "1.0.0",
+  "runId": "local-run",
+  "scenario": {
+    "schemaVersion": 1,
+    "id": "rest",
+    "templateId": "rest",
+    "name": "午间休憩",
+    "description": "停车太热时，降温、轻音乐，给自己一个舒适的休息空间。",
+    "sourcePrompt": "停车休息时，车内持续太热就开空调降温，放点轻音乐；我开始开车就结束休息模式。",
+    "version": 1,
+    "confirmed": true,
+    "trigger": {
+      "signal": "temperature",
+      "operator": "gt",
+      "threshold": 28,
+      "holdSeconds": 10
+    },
+    "guard": "parked",
+    "actions": [
+      {
+        "capability": "climate.power",
+        "value": true
+      },
+      {
+        "capability": "climate.temperature",
+        "value": 24
+      },
+      {
+        "capability": "media.play",
+        "value": "轻音乐"
+      },
+      {
+        "capability": "media.volume",
+        "value": 20
+      }
+    ],
+    "exit": "cancel-pending-no-restore",
+    "timeoutSeconds": 3,
+    "failurePolicy": "continue-independent"
+  },
+  "initialState": {
+    "temperature": 30,
+    "illuminance": 60,
+    "co2": 1400,
+    "gear": "P",
+    "speed": 0,
+    "climatePower": false,
+    "targetTemperature": 26,
+    "fan": 1,
+    "recirculation": true,
+    "playing": false,
+    "track": null,
+    "volume": 30,
+    "light": 0
+  },
+  "fault": "none",
+  "status": "cancelled",
+  "time": 11,
+  "vehicle": {
+    "temperature": 30,
+    "illuminance": 60,
+    "co2": 1400,
+    "gear": "P",
+    "speed": 0,
+    "climatePower": true,
+    "targetTemperature": 27,
+    "fan": 1,
+    "recirculation": true,
+    "playing": false,
+    "track": null,
+    "volume": 30,
+    "light": 0
+  },
+  "events": [
+    {
+      "index": 0,
+      "time": 0,
+      "kind": "armed",
+      "detail": "场景 v1 已就绪；只运行一次，退出时不恢复设备状态",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": false,
+        "targetTemperature": 26,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 1,
+      "time": 0,
+      "kind": "condition",
+      "detail": "触发条件满足，开始持续计时",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": false,
+        "targetTemperature": 26,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 2,
+      "time": 10,
+      "kind": "triggered",
+      "detail": "条件持续 10 秒，开始执行",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": false,
+        "targetTemperature": 26,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 3,
+      "time": 10,
+      "kind": "accepted",
+      "detail": "请求已接受：空调电源 · 开启；等待状态回读",
+      "capability": "climate.power",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": false,
+        "targetTemperature": 26,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 4,
+      "time": 11,
+      "kind": "confirmed",
+      "detail": "状态已达成：空调电源 · 开启",
+      "capability": "climate.power",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 26,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 5,
+      "time": 11,
+      "kind": "accepted",
+      "detail": "请求已接受：目标温度 · 24°C；等待状态回读",
+      "capability": "climate.temperature",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 26,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 6,
+      "time": 11,
+      "kind": "manual",
+      "detail": "用户手动操作：目标温度 · 27°C；本次运行不再控制该设备",
+      "capability": "climate.temperature",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 27,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 7,
+      "time": 11,
+      "kind": "cancelled",
+      "detail": "用户接管，取消在途动作",
+      "capability": "climate.temperature",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 27,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 8,
+      "time": 11,
+      "kind": "accepted",
+      "detail": "请求已接受：播放音乐 · 轻音乐；等待状态回读",
+      "capability": "media.play",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 27,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 9,
+      "time": 11,
+      "kind": "cancelled",
+      "detail": "停止预演，取消在途请求",
+      "capability": "media.play",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 27,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    },
+    {
+      "index": 10,
+      "time": 11,
+      "kind": "cancelled",
+      "detail": "用户停止了本次运行；已完成的设备动作不回滚",
+      "state": {
+        "temperature": 30,
+        "illuminance": 60,
+        "co2": 1400,
+        "gear": "P",
+        "speed": 0,
+        "climatePower": true,
+        "targetTemperature": 27,
+        "fan": 1,
+        "recirculation": true,
+        "playing": false,
+        "track": null,
+        "volume": 30,
+        "light": 0
+      }
+    }
+  ],
+  "commands": [
+    {
+      "time": 11,
+      "type": "manual",
+      "action": {
+        "capability": "climate.temperature",
+        "value": 27
+      }
+    },
+    {
+      "time": 11,
+      "type": "cancel"
+    }
+  ],
+  "progress": 1,
+  "holdElapsed": 11,
+  "locked": ["climate"],
+  "caveat": "仅表示当前虚拟车辆模型中的状态回读，不构成真车验收或安全认证。"
+}

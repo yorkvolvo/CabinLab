@@ -54,7 +54,14 @@ export type TemplateId = Scenario['templateId'];
 
 export const catalog: Record<
   Capability,
-  { label: string; unit: string; range: string; precondition: string; result: string }
+  {
+    label: string;
+    unit: string;
+    range: string;
+    precondition: string;
+    result: string;
+    boundary: string;
+  }
 > = {
   'climate.power': {
     label: '空调电源',
@@ -62,6 +69,7 @@ export const catalog: Record<
     range: '开 / 关',
     precondition: 'P 挡且车速为 0',
     result: '电源状态回读',
+    boundary: '模拟整车单一电源；接入时需区分前后排、电源与制冷开关。',
   },
   'climate.temperature': {
     label: '目标温度',
@@ -69,6 +77,7 @@ export const catalog: Record<
     range: '16–30 °C',
     precondition: '停车且空调已开启',
     result: '设定值回读（不代表车内已降温）',
+    boundary: '模拟单温区；真实温区、步长与车型范围需另行确认。',
   },
   'climate.fan': {
     label: '风量档位',
@@ -76,6 +85,7 @@ export const catalog: Record<
     range: '1–5 档',
     precondition: '停车且空调已开启',
     result: '风量档位回读',
+    boundary: '1–5 档仅为模拟范围；不能直接当作真实车型档位。',
   },
   'climate.recirculation': {
     label: '内循环',
@@ -83,6 +93,7 @@ export const catalog: Record<
     range: '开 / 关',
     precondition: '停车且空调已开启',
     result: '循环模式回读',
+    boundary: '布尔值仅表示模拟内外循环；真实模式枚举需显式转换。',
   },
   'media.play': {
     label: '播放音乐',
@@ -90,6 +101,7 @@ export const catalog: Record<
     range: '轻音乐 / 自然白噪音',
     precondition: 'P 挡且车速为 0',
     result: '播放状态回读',
+    boundary: '曲目是合成占位内容；没有真实播放器、账户或内容授权。',
   },
   'media.pause': {
     label: '暂停媒体',
@@ -97,6 +109,7 @@ export const catalog: Record<
     range: '暂停',
     precondition: 'P 挡且车速为 0',
     result: '暂停状态回读',
+    boundary: '真实播放器的调用结果仍需独立播放状态回读。',
   },
   'media.volume': {
     label: '媒体音量',
@@ -104,6 +117,7 @@ export const catalog: Record<
     range: '0–60 %',
     precondition: 'P 挡且车速为 0',
     result: '音量值回读',
+    boundary: '模拟百分比；参考工程使用离散音量级，不能直接透传百分比。',
   },
   'ambient.light': {
     label: '阅读灯亮度',
@@ -111,6 +125,7 @@ export const catalog: Record<
     range: '0–100 %',
     precondition: 'P 挡且车速为 0',
     result: '灯光亮度回读',
+    boundary: '仅模拟亮度；参考工程的阅读灯开关不能等同于亮度调节。',
   },
 };
 

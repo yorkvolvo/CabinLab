@@ -20,7 +20,7 @@ test('零持续时间变更会被独立抖动与时间边界用例发现', () =>
   const result = verifyScenario(changed);
   assert.equal(result.cases.find((c) => c.id === 'jitter')?.passed, false);
   assert.equal(result.cases.find((c) => c.id === 'duration')?.passed, false);
-  assert.equal(result.contractVersion, '1.0');
+  assert.equal(result.contractVersion, '1.1');
   assert.equal(cloneTemplate('rest').trigger.holdSeconds, 10);
 });
 test('运行冻结场景版本，不受外部修改影响', () => {

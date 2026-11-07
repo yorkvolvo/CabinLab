@@ -88,8 +88,8 @@ test('版本对照用固定预期暴露零秒变更的 8 项回归，反向对�
   const before = cloneTemplate('rest');
   const after = { ...before, version: 2, trigger: { ...before.trigger, holdSeconds: 0 } };
   const comparison = compareVersions(before, after);
-  assert.equal(comparison.previous.passed, 20);
-  assert.equal(comparison.current.passed, 12);
+  assert.equal(comparison.previous.passed, 22);
+  assert.equal(comparison.current.passed, 14);
   assert.equal(comparison.regressions, 8);
   assert.equal(comparison.recoveries, 0);
   assert.equal(comparison.transitions.find((t) => t.id === 'jitter')?.change, 'regression');

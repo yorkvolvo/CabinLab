@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   actionLabel,
+  catalog,
   resourceOf,
   validateScenario,
   type Action,
@@ -27,13 +28,23 @@ export const vehicleSchema = z
   })
   .strict();
 export type Vehicle = z.infer<typeof vehicleSchema>;
-export type Fault = Capability | 'none';
-export type RunStatus = 'armed' | 'executing' | 'completed' | 'partial' | 'stopped' | 'cancelled';
+export const faultSchema = z.enum([
+  'none',
+  ...Object.keys(catalog).flatMap((key) => {
+    const capability = key as Capability;
+    return [capability, `${capability}:rejected`, `${capability}:feedback-lost`] as const;
+  }),
+]);
+export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0']);
+export type Fault = z.infer<typeof faultSchema>;
+export type RunStatus =
+  'armed' | 'executing' | 'completed' | 'partial' | 'uncertain' | 'stopped' | 'cancelled';
 export const runStatusLabels: Record<RunStatus, string> = {
   armed: '等待触发',
   executing: '正在执行',
   completed: '执行完成',
   partial: '部分完成',
+  uncertain: '结果待核实',
   stopped: '条件退出',
   cancelled: '已停止',
 };
@@ -45,6 +56,8 @@ export type EventKind =
   | 'accepted'
   | 'confirmed'
   | 'timeout'
+  | 'rejected'
+  | 'unknown'
   | 'blocked'
   | 'input'
   | 'manual'
@@ -69,7 +82,7 @@ export type RunCommand =
   | { time: number; type: 'cancel' };
 export interface RunEvidence {
   schemaVersion: 1;
-  runtimeVersion: '1.0.0';
+  runtimeVersion: z.infer<typeof runtimeVersionSchema>;
   runId: string;
   scenario: Scenario;
   initialState: Vehicle;
@@ -122,13 +135,19 @@ export class CabinRuntime {
   private pending?: { action: Action; acceptedAt: number };
   private failures = 0;
   private locked = new Set<Resource>();
+  private uncertain = new Set<Resource>();
 
   constructor(
     scenario: Scenario,
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.1.0',
   ) {
+    faultSchema.parse(fault);
+    runtimeVersionSchema.parse(runtimeVersion);
+    if (runtimeVersion === '1.0.0' && fault.includes(':'))
+      throw new Error('旧运行时不支持请求拒绝或回读丢失故障');
     const validated = validateScenario(scenario);
     if (!validated.scenario) throw new Error(validated.errors.join('；'));
     if (!validated.scenario.confirmed) throw new Error('请先确认场景参数与退出策略');
@@ -206,13 +225,28 @@ export class CabinRuntime {
         this.stop('动作前策略检查未通过');
         return;
       }
-      if (this.locked.has(resource) || (needsPower && !this.vehicle.climatePower)) {
+      if (
+        this.locked.has(resource) ||
+        this.uncertain.has(resource) ||
+        (needsPower && !this.vehicle.climatePower)
+      ) {
         this.failures++;
         this.log(
           'blocked',
           this.locked.has(resource)
             ? '用户已接管该设备，自动化让出控制'
-            : '空调未开启，依赖条件未达成',
+            : this.uncertain.has(resource)
+              ? '该设备有结果未知的请求，停止后续控制，等待人工核实'
+              : '空调未开启，依赖条件未达成',
+          action.capability,
+        );
+        continue;
+      }
+      if (this.fault === `${action.capability}:rejected`) {
+        this.failures++;
+        this.log(
+          'rejected',
+          `请求被拒绝：${actionLabel(action)}；未接受、未执行`,
           action.capability,
         );
         continue;
@@ -221,12 +255,14 @@ export class CabinRuntime {
       this.log('accepted', `请求已接受：${actionLabel(action)}；等待状态回读`, action.capability);
       return;
     }
-    this.status = this.failures ? 'partial' : 'completed';
+    this.status = this.uncertain.size ? 'uncertain' : this.failures ? 'partial' : 'completed';
     this.log(
       'completed',
-      this.failures
-        ? `部分完成：${this.failures} 项未达成，请检查证据`
-        : '全部动作状态已回读；本次场景结束',
+      this.uncertain.size
+        ? '存在结果未知的请求；可能已执行，不自动重试，请核实设备状态'
+        : this.failures
+          ? `部分完成：${this.failures} 项未达成，请检查证据`
+          : '全部动作状态已回读；本次场景结束',
     );
   }
 
@@ -269,12 +305,16 @@ export class CabinRuntime {
       if (this.status !== 'executing' || !this.pending) continue;
       const { action, acceptedAt } = this.pending;
       const elapsed = this.time - acceptedAt;
-      if (this.fault === action.capability) {
+      const feedbackLost = this.fault === `${action.capability}:feedback-lost`;
+      if (this.fault === action.capability || feedbackLost) {
         if (elapsed < this.scenario.timeoutSeconds) continue;
         this.failures++;
+        if (feedbackLost) this.uncertain.add(resourceOf(action.capability));
         this.log(
-          'timeout',
-          `服务超时：${actionLabel(action)}；未观测到状态达成`,
+          feedbackLost ? 'unknown' : 'timeout',
+          feedbackLost
+            ? `回读丢失：${actionLabel(action)}；结果未知，可能已执行；保留最后已知状态，不自动重试`
+            : `服务超时：${actionLabel(action)}；未观测到状态达成`,
           action.capability,
         );
       } else {
@@ -349,7 +389,7 @@ export class CabinRuntime {
   snapshot(): RunSnapshot {
     return structuredClone({
       schemaVersion: 1,
-      runtimeVersion: '1.0.0',
+      runtimeVersion: this.runtimeVersion,
       runId: this.runId,
       scenario: this.scenario,
       initialState: this.initialState,
@@ -381,6 +421,7 @@ export function replayEvidence(evidence: RunEvidence): CabinRuntime {
     evidence.initialState,
     evidence.fault,
     `${evidence.runId}-replay`,
+    evidence.runtimeVersion,
   );
   const advance = (target: number) => {
     while (runtime.snapshot().time < target && !isTerminal(runtime.snapshot().status))

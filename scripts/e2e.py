@@ -61,8 +61,10 @@ with sync_playwright() as p:
 
     page.get_by_role("button", name="运行全部验证", exact=True).click()
     expect(page.get_by_text("当前验证全部通过", exact=True)).to_be_visible()
-    assert page.locator(".check-item.passed").count() == 20
-    passed("20 项产品基线验证通过")
+    assert page.locator(".check-item.passed").count() == 22
+    expect(page.locator(".verification .panel-heading")).to_contain_text("22 CHECKS")
+    expect(page.locator(".toast")).to_contain_text("22 项验证全部通过")
+    passed("22 项产品基线验证通过")
 
     compile_calls = []
     page.on("request", lambda request: compile_calls.append(request.url) if request.url.endswith("/api/compile") else None)
@@ -111,6 +113,30 @@ with sync_playwright() as p:
     steps(15)
     expect(page.locator(".run-status")).to_contain_text("执行完成")
     passed("温控超时呈现部分完成，故障恢复后能重新成功")
+
+    select_template("午间休憩")
+    page.get_by_label("故障注入", exact=True).select_option("climate.power:rejected")
+    steps(20)
+    expect(page.locator(".run-status")).to_contain_text("部分完成")
+    rejected = export_run("run-rejected.json")
+    assert len([e for e in rejected["events"] if e["kind"] == "rejected"]) == 1
+    assert not [e for e in rejected["events"] if e.get("capability") == "climate.power" and e["kind"] == "accepted"]
+    assert rejected["vehicle"]["playing"] is True
+    passed("请求拒绝不冒充接受，空调依赖阻止而媒体继续")
+
+    select_template("午间休憩")
+    page.get_by_label("故障注入", exact=True).select_option("media.play:feedback-lost")
+    steps(20)
+    expect(page.locator(".run-status")).to_contain_text("结果待核实")
+    expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
+    unknown = export_run("run-feedback-lost.json")
+    assert unknown["runtimeVersion"] == "1.1.0"
+    assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
+    assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    assert export_run("run-feedback-lost-replay.json")["events"] == unknown["events"]
+    page.screenshot(path=str(ARTIFACTS / "feedback-lost.png"), full_page=True)
+    passed("回读丢失显示未知，停止同设备后续动作，重放保持未知")
 
     select_template("午间休憩")
     steps(11)
@@ -219,8 +245,18 @@ with sync_playwright() as p:
     expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name=re.compile("能力目录")).click()
     assert page.locator(".capability-card").count() == 8
+    expect(page.get_by_text(re.compile("不能直接透传百分比"))).to_be_visible()
+    expect(page.get_by_text(re.compile("阅读灯开关不能等同于亮度调节"))).to_be_visible()
     page.get_by_role("button", name="场景工作台", exact=True).click()
     passed("版本本地持久化、DSL 弹窗键盘关闭、8 项能力目录")
+
+    for prompt in ["停车休息时不要开空调", "取消停车休息场景", "停车休息持续二十秒后开空调"]:
+        page.get_by_label("自然语言需求", exact=True).fill(prompt)
+        page.get_by_role("button", name="生成场景", exact=True).click()
+        expect(page.get_by_role("alert")).to_be_visible()
+        expect(page.get_by_text("待确认草案", exact=True)).to_have_count(0)
+        expect(page.get_by_label("场景版本", exact=True)).to_have_value("1")
+    passed("否定、取消和中文数值先澄清，不产生可执行草案或改写版本")
 
     page.get_by_role("button", name="修改当前场景", exact=True).click()
     page.get_by_label("自然语言需求", exact=True).fill("把持续时间改为 8 秒，目标温度设为 22°C")
@@ -245,15 +281,15 @@ with sync_playwright() as p:
     page.get_by_label("对照版本", exact=True).select_option("1")
     page.get_by_role("button", name="对照验证两个版本", exact=True).click()
     expect(page.get_by_text("新增失败 8 项", exact=True)).to_be_visible()
-    expect(page.locator(".comparison-stats")).to_contain_text("v1：20/20")
-    expect(page.locator(".comparison-stats")).to_contain_text("v4：12/20")
+    expect(page.locator(".comparison-stats")).to_contain_text("v1：22/22")
+    expect(page.locator(".comparison-stats")).to_contain_text("v4：14/22")
     with page.expect_download() as info:
         page.get_by_role("button", name="导出版本对照", exact=True).click()
     info.value.save_as(ARTIFACTS / "version-comparison.json")
     comparison = json.loads((ARTIFACTS / "version-comparison.json").read_text())
-    assert comparison["regressions"] == 8 and comparison["contractVersion"] == "1.0"
+    assert comparison["regressions"] == 8 and comparison["contractVersion"] == "1.1"
     page.locator(".version-comparison").screenshot(path=str(ARTIFACTS / "version-comparison.png"))
-    passed("版本对照报告 20→12 与 8 项回归，导出保留两版独立验证证据")
+    passed("版本对照报告 22→14 与 8 项回归，导出保留两版独立验证证据")
 
     page.get_by_label("场景版本", exact=True).select_option("1")
     page.get_by_label("自然语言需求", exact=True).fill("停车休息时打开车窗")
@@ -341,6 +377,11 @@ with sync_playwright() as p:
     file_input.set_input_files(ARTIFACTS / "run-timeout.json")
     expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
     expect(evidence_page.locator(".evidence-result")).to_contain_text("原始运行结果：部分完成")
+    file_input.set_input_files(ARTIFACTS / "run-feedback-lost.json")
+    expect(evidence_page.get_by_text("重放一致性核验通过", exact=True)).to_be_visible()
+    expect(evidence_page.locator(".evidence-result")).to_contain_text("原始运行结果：结果待核实")
+    expect(evidence_page.locator(".evidence-result")).to_contain_text("不能据此认定动作未执行")
+    passed("新会话独立核验未知结果，不把重放一致解释为动作成功")
     tampered = json.loads(json.dumps(successful))
     tampered["vehicle"]["targetTemperature"] = 23
     (ARTIFACTS / "run-tampered.json").write_text(json.dumps(tampered))

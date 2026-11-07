@@ -29,7 +29,7 @@ export default function Verification({
         <span>
           <ShieldCheck size={17} /> 验证中心
         </span>
-        <span className="mono muted">20 CHECKS</span>
+        <span className="mono muted">{report ? `${report.total} CHECKS` : 'FIXED CHECKS'}</span>
       </div>
       <div className={`verification-score ${failed ? 'has-failures' : ''}`}>
         <div className="score-icon">
@@ -46,10 +46,7 @@ export default function Verification({
                 <small> / {report.total}</small>
               </>
             ) : (
-              <>
-                <span className="score-dash">—</span>
-                <small> / 20</small>
-              </>
+              <span className="score-dash">—</span>
             )}
           </strong>
         </div>
@@ -139,6 +136,7 @@ export default function Verification({
             '持续触发与边界波动',
             '挡位、车速实时守卫',
             '服务超时与部分完成',
+            '请求拒绝与结果未知',
             '手动接管优先',
             '停止、重放与能力边界',
           ].map((name) => (

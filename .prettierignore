@@ -1,4 +1,6 @@
 dist
 node_modules
 artifacts
+.venv
+.local
 package-lock.json

@@ -43,6 +43,7 @@ import { cloneTemplate, templates } from './domain/templates';
 import { assumptionsFor, type CompileResult } from './domain/compiler';
 import {
   CabinRuntime,
+  faultSchema,
   initialVehicle,
   isTerminal,
   replayEvidence,
@@ -67,6 +68,8 @@ const eventLabels = {
   accepted: '已接受',
   confirmed: '已达成',
   timeout: '超时',
+  rejected: '已拒绝',
+  unknown: '结果未知',
   blocked: '已阻止',
   input: '信号',
   manual: '手动',
@@ -393,7 +396,7 @@ export default function App() {
     setReport(next);
     setToast(
       next.passed === next.total
-        ? `v${selected.version} 的 20 项验证全部通过`
+        ? `v${selected.version} 的 ${next.total} 项验证全部通过`
         : `发现 ${next.total - next.passed} 项偏离产品预期的行为`,
     );
   }
@@ -595,6 +598,8 @@ export default function App() {
                     <dd>{item.precondition}</dd>
                     <dt>可观测结果</dt>
                     <dd>{item.result}</dd>
+                    <dt>接入边界</dt>
+                    <dd>{item.boundary}</dd>
                   </dl>
                   <span className="capability-footer">
                     <Check size={12} />
@@ -1081,13 +1086,21 @@ export default function App() {
                             aria-label="故障注入"
                             disabled={Boolean(active)}
                             value={fault}
-                            onChange={(e) => setFault(e.target.value as Fault)}
+                            onChange={(e) => setFault(faultSchema.parse(e.target.value))}
                           >
                             <option value="none">无故障</option>
                             {selected.actions.map((a) => (
-                              <option key={a.capability} value={a.capability}>
-                                {catalog[a.capability].label}超时
-                              </option>
+                              <optgroup key={a.capability} label={catalog[a.capability].label}>
+                                <option value={a.capability}>
+                                  {catalog[a.capability].label}超时
+                                </option>
+                                <option value={`${a.capability}:rejected`}>
+                                  {catalog[a.capability].label}请求被拒绝
+                                </option>
+                                <option value={`${a.capability}:feedback-lost`}>
+                                  {catalog[a.capability].label}回读丢失（结果未知）
+                                </option>
+                              </optgroup>
                             ))}
                           </select>
                         </label>
@@ -1147,10 +1160,15 @@ export default function App() {
                         <span>2× VIRTUAL TIME</span>
                       </div>
                     </div>
-                    <div className="run-status">
+                    {snapshot?.events.some((event) => event.kind === 'unknown') && (
+                      <p className="feedback-warning" role="status">
+                        回读丢失：画面保留最后已知状态，动作可能已执行。同一设备后续控制已阻止，不自动重试；请先核实状态。
+                      </p>
+                    )}
+                    <div className="run-status" role="status">
                       <span>
                         <span
-                          className={`live-dot ${snapshot?.status === 'partial' ? 'amber' : ''}`}
+                          className={`live-dot ${snapshot?.status === 'partial' || snapshot?.status === 'uncertain' ? 'amber' : ''}`}
                         />
                         {snapshot ? statusLabels[snapshot.status] : '准备就绪'}
                         {active && !playing ? ' · 已暂停' : ''}
