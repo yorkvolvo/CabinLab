@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ArrowUpRight,
   AlarmClock,
+  PawPrint,
   BatteryCharging,
   BookOpen,
   Check,
@@ -80,6 +81,8 @@ const icons = {
   pickup: MapPin,
   passengerWait: Users,
   rainClose: CloudRain,
+  petWait: PawPrint,
+  rainMirror: CloudRain,
 };
 const eventLabels = {
   armed: '就绪',
@@ -133,10 +136,11 @@ export default function App() {
   const scenario = draft ?? selected;
   const currentVersions = versions.filter((s) => s.templateId === selected.templateId);
   const signal = scenario.trigger.signal;
+  const numericTrigger = signal !== 'driverExit' && signal !== 'petPresent';
   const currentSignal = signalLabels[signal];
   const reminder = scenario.reminder;
   const hasSeatInputs = Boolean(
-    reminder ||
+    (reminder && reminder.kind !== 'pet') ||
     signal === 'driverExit' ||
     scenario.actions.some((action) => action.capability === 'seat.recline'),
   );
@@ -906,11 +910,11 @@ export default function App() {
                         <span className="flow-label">WHEN / 触发条件</span>
                         <h3>
                           {currentSignal.label}
-                          {signal !== 'driverExit' &&
+                          {numericTrigger &&
                             (scenario.trigger.operator === 'gt' ? ' 高于' : ' 低于')}
                         </h3>
                         <div className="trigger-inputs">
-                          {signal !== 'driverExit' && (
+                          {numericTrigger && (
                             <label>
                               <input
                                 aria-label="触发阈值"
@@ -1022,7 +1026,49 @@ export default function App() {
                             </div>
                           ))}
                         </div>
-                        {reminder && (
+                        {reminder?.kind === 'pet' && (
+                          <div className="trigger-inputs">
+                            <label>
+                              <span>高温提醒阈值</span>
+                              <input
+                                type="number"
+                                min={16}
+                                max={40}
+                                aria-label="高温提醒阈值"
+                                value={reminder.maxTemperature}
+                                onChange={(event) =>
+                                  editScenario({
+                                    reminder: {
+                                      ...reminder,
+                                      maxTemperature: Number(event.target.value),
+                                    },
+                                  })
+                                }
+                              />
+                              <span>°C</span>
+                            </label>
+                            <label>
+                              <span>低电量提醒阈值</span>
+                              <input
+                                type="number"
+                                min={1}
+                                max={100}
+                                aria-label="低电量提醒阈值"
+                                value={reminder.minBatteryPercent}
+                                onChange={(event) =>
+                                  editScenario({
+                                    reminder: {
+                                      ...reminder,
+                                      minBatteryPercent: Number(event.target.value),
+                                    },
+                                  })
+                                }
+                              />
+                              <span>%</span>
+                            </label>
+                          </div>
+                        )}
+                        {reminder && reminder.kind !== 'pet' && (
                           <div className="trigger-inputs">
                             <label>
                               <span>{reminder.kind === 'wake' ? '唤醒时间' : '提醒电量'}</span>
@@ -1158,7 +1204,7 @@ export default function App() {
                         <span className="eyebrow">实时信号</span>
                         <span className="small muted">调整输入，观察场景响应</span>
                       </div>
-                      {signal !== 'driverExit' && (
+                      {numericTrigger && (
                         <div className="signal-control">
                           <label htmlFor="signal-slider">
                             <Thermometer size={14} />
@@ -1203,6 +1249,56 @@ export default function App() {
                         <p className="small muted" role="status">
                           前挡除雾回读：{vehicle.frontDefrost ? '已开启' : '已关闭'}
                         </p>
+                      )}
+                      {vehicle.mirrorHeat !== undefined && (
+                        <p className="small muted" role="status">
+                          后视镜加热回读：{vehicle.mirrorHeat ? '已开启' : '已关闭'}
+                        </p>
+                      )}
+                      {reminder?.kind === 'pet' && (
+                        <div className="reminder-controls" aria-label="宠物留舱模拟输入">
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={vehicle.petPresent === true}
+                              onChange={(event) =>
+                                changeSignals({ petPresent: event.target.checked })
+                              }
+                            />{' '}
+                            确认宠物在舱
+                          </label>
+                          <label>
+                            模拟舱温
+                            <input
+                              type="range"
+                              min={16}
+                              max={40}
+                              aria-label="模拟舱温"
+                              value={vehicle.temperature}
+                              onChange={(event) =>
+                                changeSignals({ temperature: Number(event.target.value) })
+                              }
+                            />
+                            {vehicle.temperature}°C
+                          </label>
+                          <label>
+                            模拟电量
+                            <input
+                              type="range"
+                              min={0}
+                              max={100}
+                              aria-label="模拟电量"
+                              value={vehicle.batteryPercent ?? 0}
+                              onChange={(event) =>
+                                changeSignals({ batteryPercent: Number(event.target.value) })
+                              }
+                            />
+                            {vehicle.batteryPercent === undefined
+                              ? '未知'
+                              : `${vehicle.batteryPercent}%`}
+                          </label>
+                          <small>模拟监测 · 用于预演</small>
+                        </div>
                       )}
                       {hasSeatInputs && (
                         <div className="reminder-controls" aria-label="座位与车辆模拟输入">

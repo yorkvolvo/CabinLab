@@ -199,6 +199,8 @@ async function compileWithProvider(
     '\n雨天除雾用 templateId=rainDefog，模拟雨量等级用 rainLevel（0–3 整数），高于阈值用 gt，前挡除雾开关用 climate.frontDefrost（布尔值，前置动作 climate.power=true）。接娃等候用 templateId=pickup，距接娃点的模拟距离用 pickupDistance（米），小于阈值用 lt；暂停媒体用 media.pause=true。按明确顺序执行动作；这两个场景的既定退出策略是停止后续动作、保留已完成状态。';
   system +=
     '\n主驾离车后的乘客等候用 templateId=passengerWait 和 trigger={"signal":"driverExit","operator":"gt","threshold":0,"holdSeconds":用户指定的秒数}。执行器识别开门离座、关门且副驾或后排仍有人，并在主驾返回、所有乘客离开或驶离时取消尚未完成的动作。雨天自动关窗用 templateId=rainClose、trigger.signal=rainLevel、operator=gt，关闭四门车窗用 {"capability":"window.close","value":true}。执行器在驶离或雨量条件失效时取消尚未完成的动作，并在请求和回读前检查窗路。上述退出与窗路要求由固定策略实现，直接使用 guard=parked 和 exit=cancel-pending-no-restore，无需添加字段、额外动作或 reminder，也无需为这些已支持的条件请求澄清。';
+  system +=
+    '\n宠物留舱用 templateId=petWait、trigger.signal=petPresent、operator=gt、threshold=0。温度和电量监测用完整 reminder={"kind":"pet","maxTemperature":高温提醒阈值,"minBatteryPercent":低电量提醒阈值}。执行器在准备完成后检查舱温、电量与空调回读，宠物离舱或驶离时按固定退出策略取消后续流程，无需添加动作或询问。雨天后视镜加热用 templateId=rainMirror、trigger.signal=rainLevel、operator=gt、动作 {"capability":"mirror.heat","value":true}，仅模拟开关回读，无需添加前挡除雾、空调或 reminder。';
   if (baseScenario)
     system +=
       '\n每个动作都使用独立的 capability 和 value 键，例如 {"capability":"climate.fan","value":4}。';

@@ -66,20 +66,24 @@ batch: for (const model of models) {
         if (intent === 'modify') {
           if (expected.reminder?.kind === 'wake') expected.reminder.afterSeconds += 60;
           else if (expected.reminder?.kind === 'charge') expected.reminder.atPercent += 5;
+          else if (expected.reminder?.kind === 'pet') expected.reminder.maxTemperature += 1;
           else if (expected.templateId === 'pickup') expected.trigger.threshold += 20;
           else expected.trigger.holdSeconds += 2;
           if (numeric && changed !== undefined)
             expected.actions.find((action) => action.capability === numeric.capability)!.value =
               changed;
-          if (expected.templateId === 'rainClose') expected.trigger.threshold = 2;
+          if (expected.templateId === 'rainClose' || expected.templateId === 'rainMirror')
+            expected.trigger.threshold = 2;
         }
         const prompt =
           intent === 'create'
             ? baseline.reminder ||
-              ['rainDefog', 'pickup', 'passengerWait', 'rainClose'].includes(baseline.templateId)
+              ['rainDefog', 'pickup', 'passengerWait', 'rainClose', 'rainMirror'].includes(
+                baseline.templateId,
+              )
               ? baseline.sourcePrompt
               : `创建“${baseline.name}”。仅 P 挡且车速为 0，${signalLabels[baseline.trigger.signal].label}${baseline.trigger.operator === 'gt' ? '高于' : '低于'} ${baseline.trigger.threshold}${signalLabels[baseline.trigger.signal].unit}连续 ${baseline.trigger.holdSeconds} 秒，依次执行：${baseline.actions.map(actionLabel).join('；')}。开始行驶或触发条件失效时停止后续动作，不恢复旧值。`
-            : `只修改这两项：${expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${numeric ? `${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}` : '模拟雨量等级的触发阈值改为 2 级，仍须高于阈值'}。其余字段、动作及顺序全部原样保留，不增删动作。`;
+            : `只修改这两项：${expected.reminder?.kind === 'pet' ? `高温提醒阈值改为 ${expected.reminder.maxTemperature}°C` : expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${numeric ? `${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}` : '模拟雨量等级的触发阈值改为 2 级，仍须高于阈值'}。其余字段、动作及顺序全部原样保留，不增删动作。`;
         const started = performance.now();
         let passed = false;
         let error: string | undefined;
@@ -266,8 +270,32 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
       assert.equal(blocked.vehicle.windowsClosed, false);
       assert.ok(!blocked.events.some((event) => event.kind === 'accepted'));
     }
+    if (expected.templateId === 'rainMirror') assert.equal(complete.vehicle.mirrorHeat, true);
     assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
     return { status: complete.status, confirmedActions: expected.actions.length };
+  }
+  if (reminder.kind === 'pet') {
+    assert.equal(runtime.step().status, 'armed');
+    runtime.setSignals({ petPresent: true });
+    const ready = runtime.advanceTo(readyAt + 1);
+    assert.equal(ready.status, 'waiting');
+    assert.equal(
+      ready.vehicle.targetTemperature,
+      expected.actions.find((a) => a.capability === 'climate.temperature')?.value,
+    );
+    assert.ok(
+      !runtime
+        .setSignals({ temperature: reminder.maxTemperature - 1 })
+        .events.some((e) => e.kind === 'reminder'),
+    );
+    const complete = runtime.setSignals({ temperature: reminder.maxTemperature });
+    assert.equal(complete.events.filter((e) => e.kind === 'reminder').length, 1);
+    assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
+    return {
+      status: complete.status,
+      reminderTime: complete.time,
+      confirmedActions: expected.actions.length,
+    };
   }
   const seat = expected.actions.find((action) => action.capability === 'seat.recline');
   assert.ok(seat);

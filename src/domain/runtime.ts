@@ -42,6 +42,8 @@ export const vehicleSchema = z
     rearOccupied: z.boolean().optional(),
     windowPathClear: z.boolean().optional(),
     windowsClosed: z.boolean().optional(),
+    petPresent: z.boolean().optional(),
+    mirrorHeat: z.boolean().optional(),
   })
   .strict();
 export type Vehicle = z.infer<typeof vehicleSchema>;
@@ -61,6 +63,7 @@ export const signalsSchema = vehicleSchema
     driverDoorOpen: true,
     rearOccupied: true,
     windowPathClear: true,
+    petPresent: true,
   })
   .partial()
   .strict();
@@ -86,7 +89,7 @@ export const faultSchema = z.enum([
     return [capability, `${capability}:rejected`, `${capability}:feedback-lost`] as const;
   }),
 ]);
-export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0']);
+export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0']);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
   | 'armed'
@@ -184,7 +187,7 @@ export function previewVehicle(scenario: Scenario): Vehicle {
   const bounds = signalLabels[signal];
   const vehicle: Vehicle = {
     ...initialVehicle,
-    ...(signal === 'driverExit'
+    ...(signal === 'driverExit' || signal === 'petPresent'
       ? {}
       : {
           [signal]: Math.max(
@@ -194,7 +197,7 @@ export function previewVehicle(scenario: Scenario): Vehicle {
         }),
   };
   if (
-    scenario.reminder ||
+    (scenario.reminder && scenario.reminder.kind !== 'pet') ||
     scenario.actions.some((action) => action.capability === 'seat.recline')
   ) {
     vehicle.driverOccupied = true;
@@ -209,6 +212,13 @@ export function previewVehicle(scenario: Scenario): Vehicle {
       Math.max(0, scenario.reminder.atPercent - 10),
     );
   }
+  if (scenario.reminder?.kind === 'pet') {
+    vehicle.petPresent = false;
+    vehicle.temperature = Math.max(16, scenario.reminder.maxTemperature - 2);
+    vehicle.batteryPercent = Math.min(100, scenario.reminder.minBatteryPercent + 20);
+  }
+  if (scenario.actions.some((action) => action.capability === 'mirror.heat'))
+    vehicle.mirrorHeat = false;
   if (scenario.actions.some((action) => action.capability === 'climate.frontDefrost'))
     vehicle.frontDefrost = false;
   if (scenario.templateId === 'pickup' || scenario.templateId === 'passengerWait') {
@@ -256,7 +266,7 @@ export class CabinRuntime {
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.4.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.5.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -286,7 +296,7 @@ export class CabinRuntime {
     )
       throw new Error('旧运行时不支持雨量、接娃距离和前挡除雾');
     if (
-      runtimeVersion !== '1.4.0' &&
+      !this.supportsDepartureWindow &&
       (this.scenario.templateId === 'rainClose' ||
         this.scenario.trigger.signal === 'driverExit' ||
         this.scenario.actions.some((action) => action.capability === 'window.close') ||
@@ -294,6 +304,16 @@ export class CabinRuntime {
         fault.startsWith('window.'))
     )
       throw new Error('旧运行时不支持主驾离车或车窗关闭');
+    if (
+      runtimeVersion !== '1.5.0' &&
+      (this.scenario.trigger.signal === 'petPresent' ||
+        this.scenario.templateId === 'rainMirror' ||
+        this.scenario.actions.some((action) => action.capability === 'mirror.heat') ||
+        this.vehicle.petPresent !== undefined ||
+        this.vehicle.mirrorHeat !== undefined ||
+        fault.startsWith('mirror.'))
+    )
+      throw new Error('旧运行时不支持宠物监测或后视镜加热');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
     this.log('armed', `场景 v${scenario.version} 已就绪；只运行一次，退出时不恢复设备状态`);
@@ -316,7 +336,11 @@ export class CabinRuntime {
   }
 
   private get supportsRainPickup(): boolean {
-    return this.runtimeVersion === '1.3.0' || this.runtimeVersion === '1.4.0';
+    return this.runtimeVersion === '1.3.0' || this.supportsDepartureWindow;
+  }
+
+  private get supportsDepartureWindow(): boolean {
+    return this.runtimeVersion === '1.4.0' || this.runtimeVersion === '1.5.0';
   }
 
   private observeDeparture() {
@@ -337,6 +361,7 @@ export class CabinRuntime {
   private matches(): boolean {
     const { signal, operator, threshold } = this.scenario.trigger;
     if (signal === 'driverExit') return this.departure === 'exited';
+    if (signal === 'petPresent') return this.vehicle.petPresent === true;
     const value = this.vehicle[signal];
     return value !== undefined && (operator === 'gt' ? value > threshold : value < threshold);
   }
@@ -369,6 +394,10 @@ export class CabinRuntime {
       return;
     }
     if (this.scenario.trigger.signal === 'driverExit') this.observeDeparture();
+    if (this.fired && this.scenario.reminder?.kind === 'pet' && !this.matches()) {
+      this.stop('宠物离舱或在舱状态未知；停止后续动作与监测');
+      return;
+    }
     if (this.scenario.reminder?.kind === 'charge' && this.vehicle.charging !== true) {
       if (this.fired) this.stop('充电已断开；取消后续动作与电量提醒');
       else if (this.conditionSince !== null) {
@@ -485,6 +514,18 @@ export class CabinRuntime {
   private checkReminder() {
     const reminder = this.scenario.reminder;
     if (!reminder) return;
+    if (reminder.kind === 'pet') {
+      const warnings = [];
+      if (this.failures || this.uncertain.size || !this.vehicle.climatePower)
+        warnings.push('空调准备未确认');
+      if (this.vehicle.temperature >= reminder.maxTemperature)
+        warnings.push(`舱温达到 ${reminder.maxTemperature}°C`);
+      if (this.vehicle.batteryPercent === undefined) warnings.push('电量未知');
+      else if (this.vehicle.batteryPercent <= reminder.minBatteryPercent)
+        warnings.push(`电量降至 ${reminder.minBatteryPercent}%`);
+      if (warnings.length) this.emitReminder(`宠物留舱提醒：${warnings.join('，')}`);
+      return;
+    }
     if (reminder.kind === 'wake' && this.vehicle.driverOccupied !== true) {
       this.stop('主驾未确认有人；取消定时唤醒');
       return;
@@ -495,12 +536,15 @@ export class CabinRuntime {
         : this.vehicle.batteryPercent !== undefined &&
           this.vehicle.batteryPercent >= reminder.atPercent;
     if (!due) return;
-    this.log(
-      'reminder',
+    this.emitReminder(
       reminder.kind === 'wake'
         ? '午休时间到，请醒来'
         : `电量已达到 ${reminder.atPercent}%，请查看充电状态`,
     );
+  }
+
+  private emitReminder(detail: string) {
+    this.log('reminder', detail);
     this.reminderDueAt = undefined;
     this.finish();
   }
@@ -543,6 +587,9 @@ export class CabinRuntime {
         break;
       case 'window.close':
         this.vehicle.windowsClosed = true;
+        break;
+      case 'mirror.heat':
+        this.vehicle.mirrorHeat = action.value;
         break;
       case 'media.volume':
         this.vehicle.volume = action.value;
@@ -602,7 +649,8 @@ export class CabinRuntime {
     if (
       (!this.supportsReminders && reminderVehicleKeys.some((key) => key in allowed)) ||
       (!this.supportsRainPickup && rainPickupVehicleKeys.some((key) => key in allowed)) ||
-      (this.runtimeVersion !== '1.4.0' && departureWindowKeys.some((key) => key in allowed))
+      (!this.supportsDepartureWindow && departureWindowKeys.some((key) => key in allowed)) ||
+      (this.runtimeVersion !== '1.5.0' && 'petPresent' in allowed)
     )
       throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
@@ -629,11 +677,16 @@ export class CabinRuntime {
       throw new Error('旧运行时不支持前挡除雾');
     if (
       action.capability === 'window.close' &&
-      (this.runtimeVersion !== '1.4.0' ||
+      (!this.supportsDepartureWindow ||
         !isParked(this.vehicle) ||
         this.vehicle.windowPathClear !== true)
     )
       throw new Error('必须停车且确认窗路无障碍，才允许关闭车窗');
+    if (
+      action.capability === 'mirror.heat' &&
+      (this.runtimeVersion !== '1.5.0' || !isParked(this.vehicle))
+    )
+      throw new Error('当前运行时或停车条件不允许操作后视镜加热');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
     const resource = resourceOf(action.capability);
     this.locked.add(resource);

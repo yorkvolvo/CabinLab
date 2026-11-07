@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.4.0"
+    assert unknown["runtimeVersion"] == "1.5.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -363,6 +363,35 @@ with sync_playwright() as p:
     assert export_run("run-window-close-modified.json")["vehicle"]["windowsClosed"] is True
     passed("雨量严格阈值、在途障碍取消及四窗全闭回读")
 
+    select_template("宠物留舱")
+    steps(3)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    page.get_by_role("checkbox", name="确认宠物在舱").check()
+    steps(5)
+    expect(page.locator(".run-status")).to_contain_text("等待提醒")
+    page.get_by_role("slider", name="模拟舱温").fill("29")
+    expect(page.get_by_role("alert")).to_have_count(0)
+    page.get_by_role("slider", name="模拟舱温").fill("30")
+    expect(page.get_by_role("alert")).to_contain_text("舱温达到 30°C")
+    pet = export_run("run-pet-monitor.json")
+    assert pet["vehicle"]["climatePower"] and pet["vehicle"]["targetTemperature"] == 24
+    assert sum(e["kind"] == "reminder" for e in pet["events"]) == 1
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    expect(page.get_by_role("alert")).to_contain_text("舱温达到 30°C")
+    passed("宠物在舱确认、空调准备、高温阈值与提醒重放")
+
+    select_template("雨天后视镜加热")
+    slider.fill("1")
+    steps(6)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    slider.fill("2")
+    steps(5)
+    expect(page.get_by_text("后视镜加热回读：已关闭", exact=True)).to_be_visible()
+    steps(1)
+    expect(page.get_by_text("后视镜加热回读：已开启", exact=True)).to_be_visible()
+    assert export_run("run-mirror-heat.json")["vehicle"]["mirrorHeat"] is True
+    passed("雨天后视镜加热的严格雨量阈值与开关回读")
+
     migration_context = browser.new_context()
     old_versions = [
         {**successful["scenario"], "version": 7, "name": "我保存的午休"},
@@ -372,7 +401,7 @@ with sync_playwright() as p:
     migration_page = migration_context.new_page()
     migration_page.goto(BASE_URL)
     expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
-    assert migration_page.locator(".scenario-nav").count() == 12
+    assert migration_page.locator(".scenario-nav").count() == 14
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
@@ -412,11 +441,11 @@ with sync_playwright() as p:
     page.keyboard.press("Escape")
     expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name=re.compile("能力目录")).click()
-    assert page.locator(".capability-card").count() == 11
+    assert page.locator(".capability-card").count() == 12
     expect(page.get_by_text(re.compile("不能直接透传百分比"))).to_be_visible()
     expect(page.get_by_text(re.compile("阅读灯开关不能等同于亮度调节"))).to_be_visible()
     page.get_by_role("button", name="场景工作台", exact=True).click()
-    passed("版本本地持久化、DSL 弹窗键盘关闭、11 项能力目录")
+    passed("版本本地持久化、DSL 弹窗键盘关闭、12 项能力目录")
 
     for prompt in ["停车休息时不要开空调", "取消停车休息场景", "停车休息持续二十秒后开空调"]:
         page.get_by_label("自然语言需求", exact=True).fill(prompt)
@@ -573,7 +602,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
-    assert page.locator(".scenario-nav").count() == 12
+    assert page.locator(".scenario-nav").count() == 14
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

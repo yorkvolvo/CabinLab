@@ -15,6 +15,7 @@ export const actionSchema = z.discriminatedUnion('capability', [
     .strict(),
   z.object({ capability: z.literal('media.pause'), value: z.literal(true) }).strict(),
   z.object({ capability: z.literal('window.close'), value: z.literal(true) }).strict(),
+  z.object({ capability: z.literal('mirror.heat'), value: z.boolean() }).strict(),
   z
     .object({ capability: z.literal('media.volume'), value: z.number().int().min(0).max(60) })
     .strict(),
@@ -32,6 +33,13 @@ export const actionSchema = z.discriminatedUnion('capability', [
 export const reminderSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('wake'), afterSeconds: z.number().int().min(1).max(1800) }).strict(),
   z.object({ kind: z.literal('charge'), atPercent: z.number().int().min(1).max(100) }).strict(),
+  z
+    .object({
+      kind: z.literal('pet'),
+      maxTemperature: z.number().min(16).max(40),
+      minBatteryPercent: z.number().int().min(1).max(100),
+    })
+    .strict(),
 ]);
 export const scenarioSchema = z
   .object({
@@ -50,6 +58,8 @@ export const scenarioSchema = z
       'pickup',
       'passengerWait',
       'rainClose',
+      'petWait',
+      'rainMirror',
     ]),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
@@ -66,6 +76,7 @@ export const scenarioSchema = z
           'rainLevel',
           'pickupDistance',
           'driverExit',
+          'petPresent',
         ]),
         operator: z.enum(['gt', 'lt']),
         threshold: z.number().min(-50).max(10000),
@@ -96,7 +107,7 @@ export const scenarioSchema = z
 export type Scenario = z.infer<typeof scenarioSchema>;
 export type Action = z.infer<typeof actionSchema>;
 export type Capability = Action['capability'];
-export const resourceSchema = z.enum(['climate', 'media', 'ambient', 'seat', 'window']);
+export const resourceSchema = z.enum(['climate', 'media', 'ambient', 'seat', 'window', 'mirror']);
 export type Resource = z.infer<typeof resourceSchema>;
 export type TemplateId = Scenario['templateId'];
 
@@ -199,6 +210,14 @@ export const catalog: Record<
     result: '四门车窗全闭回读',
     boundary: '模拟四窗合并反馈，窗路信号用于预演阻止关闭。',
   },
+  'mirror.heat': {
+    label: '外后视镜加热',
+    unit: '',
+    range: '开 / 关',
+    precondition: 'P 挡且车速为 0',
+    result: '外后视镜加热开关回读',
+    boundary: '仅模拟开关回读。车型是否支持及镜面除水效果需独立验证。',
+  },
 };
 
 export const signalLabels = {
@@ -209,12 +228,15 @@ export const signalLabels = {
   rainLevel: { label: '模拟雨量等级', unit: '级', min: 0, max: 3 },
   pickupDistance: { label: '距接娃点（模拟）', unit: 'm', min: 0, max: 500 },
   driverExit: { label: '主驾离车且仍有乘客', unit: '', min: 0, max: 1 },
+  petPresent: { label: '已确认宠物在舱', unit: '', min: 0, max: 1 },
 };
 
 export const seatLabels = { driver: '主驾', passenger: '副驾' };
 
 export function reminderLabel(reminder: Scenario['reminder']): string {
   if (!reminder) return '无提醒';
+  if (reminder.kind === 'pet')
+    return `舱温达到 ${reminder.maxTemperature}°C 或电量降至 ${reminder.minBatteryPercent}% 时提醒`;
   return reminder.kind === 'wake'
     ? `准备完成后 ${reminder.afterSeconds} 秒唤醒`
     : `充电达到 ${reminder.atPercent}% 时提醒`;
@@ -281,8 +303,23 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
     errors.push('乘客等候必须使用主驾离车且仍有乘客的触发条件');
   if (scenario.templateId === 'rainClose' && (signal !== 'rainLevel' || operator !== 'gt'))
     errors.push('雨天自动关窗必须使用模拟雨量等级高于阈值');
+  if (scenario.templateId === 'rainMirror' && (signal !== 'rainLevel' || operator !== 'gt'))
+    errors.push('雨天后视镜加热必须使用模拟雨量等级高于阈值');
   if (
-    (scenario.templateId === 'passengerWait' || scenario.templateId === 'rainClose') &&
+    (scenario.templateId === 'petWait' ||
+      signal === 'petPresent' ||
+      scenario.reminder?.kind === 'pet') &&
+    (scenario.templateId !== 'petWait' ||
+      signal !== 'petPresent' ||
+      operator !== 'gt' ||
+      threshold !== 0 ||
+      scenario.reminder?.kind !== 'pet')
+  )
+    errors.push('宠物留舱必须显式确认宠物在舱，并设置温度及电量提醒');
+  if (
+    (scenario.templateId === 'passengerWait' ||
+      scenario.templateId === 'rainClose' ||
+      scenario.templateId === 'rainMirror') &&
     scenario.reminder
   )
     errors.push('该场景使用原触发条件退出，不支持附加提醒');

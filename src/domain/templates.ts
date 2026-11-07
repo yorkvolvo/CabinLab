@@ -187,6 +187,33 @@ export const templates: Record<TemplateId, Scenario> = {
     trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
     actions: [{ capability: 'window.close', value: true }],
   },
+  petWait: {
+    ...base,
+    id: 'petWait',
+    templateId: 'petWait',
+    name: '宠物留舱',
+    description: '确认宠物在舱后准备模拟空调，再监测舱温和电量。',
+    sourcePrompt:
+      '创建「宠物留舱」模拟场景。仅 P 挡且车速为 0，确认宠物在舱持续 2 秒后依次执行：开启空调电源；目标温度设为 24°C；风量设为 2 档。准备结束后监测模拟舱温和电量，舱温达到 30°C 或电量降至 20% 时提醒。宠物离舱或驶离时停止后续流程，保留已完成状态。',
+    trigger: { signal: 'petPresent', operator: 'gt', threshold: 0, holdSeconds: 2 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 24 },
+      { capability: 'climate.fan', value: 2 },
+    ],
+    reminder: { kind: 'pet', maxTemperature: 30, minBatteryPercent: 20 },
+  },
+  rainMirror: {
+    ...base,
+    id: 'rainMirror',
+    templateId: 'rainMirror',
+    name: '雨天后视镜加热',
+    description: '停车遇雨时开启模拟外后视镜加热，并等待开关回读。',
+    sourcePrompt:
+      '创建「雨天后视镜加热」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后开启外后视镜加热。驶离或雨量条件失效时停止尚未完成的动作，保留已完成状态。',
+    trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
+    actions: [{ capability: 'mirror.heat', value: true }],
+  },
 };
 
 export function cloneTemplate(id: TemplateId): Scenario {

@@ -81,10 +81,14 @@ export function assumptionsFor(scenario: Scenario): string[] {
     '停车定义为 P 挡且车速为 0；任何动作前和状态回读前都会重新检查。',
     signal === 'driverExit'
       ? `观察到主驾在座、开门离座并关门，副驾或后排仍明确有人，持续 ${holdSeconds} 秒后开始。`
-      : `${signalLabels[signal].label}${operator === 'gt' ? '高于' : '低于'} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
-    scenario.reminder
-      ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。退出不回滚。`
-      : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
+      : signal === 'petPresent'
+        ? `确认宠物在舱，持续 ${holdSeconds} 秒后开始。离舱或驶离会停止流程。`
+        : `${signalLabels[signal].label}${operator === 'gt' ? '高于' : '低于'} ${threshold} ${signalLabels[signal].unit}，连续 ${holdSeconds} 秒；中途恢复则重新计时。`,
+    scenario.reminder?.kind === 'pet'
+      ? `空调准备后开始监测，${reminderLabel(scenario.reminder)}。空调准备未确认或电量未知也会提醒。`
+      : scenario.reminder
+        ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。退出不回滚。`
+        : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
     ...(scenario.actions.some((action) => action.capability === 'seat.recline')
       ? ['对应座位需明确有人，座椅请求与回读前都会检查占用。']
       : []),
@@ -195,6 +199,8 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
     { key: 'ambient.light', names: '亮度|阅读灯亮度', unit: '%|％' },
     { key: 'wake', names: '唤醒时间|午休时长', unit: '秒' },
     { key: 'charge', names: '提醒电量|充电提醒阈值', unit: '%|％' },
+    { key: 'pet-temperature', names: '高温提醒阈值|高温提醒温度', unit: '°C|℃|度' },
+    { key: 'pet-battery', names: '低电量提醒阈值', unit: '%|％' },
     { key: 'seat.recline', names: '座椅后仰角度', unit: '°|度' },
   ];
   const changed = new Set<string>();
@@ -227,6 +233,10 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
         draft.reminder.afterSeconds = value;
       else if (field.key === 'charge' && draft.reminder?.kind === 'charge')
         draft.reminder.atPercent = value;
+      else if (field.key === 'pet-temperature' && draft.reminder?.kind === 'pet')
+        draft.reminder.maxTemperature = value;
+      else if (field.key === 'pet-battery' && draft.reminder?.kind === 'pet')
+        draft.reminder.minBatteryPercent = value;
       else {
         const action = draft.actions.find((a) => a.capability === field.key);
         if (!action)

@@ -22,6 +22,7 @@ for (const id of Object.keys(templates) as TemplateId[]) {
       runtime.setSignals({ driverOccupied: false });
       runtime.setSignals({ driverDoorOpen: false });
     }
+    if (id === 'petWait') runtime.setSignals({ petPresent: true });
     const snapshot = runtime.step(90);
     if (snapshot.reminderDueAt !== undefined) return runtime.advanceTo(snapshot.reminderDueAt);
     if (scenario.reminder?.kind === 'charge')

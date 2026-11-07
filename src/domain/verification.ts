@@ -42,6 +42,8 @@ const actionsMatch = (s: RunSnapshot, action: Action) => {
       return !v.playing;
     case 'window.close':
       return v.windowsClosed === true;
+    case 'mirror.heat':
+      return v.mirrorHeat === action.value;
     case 'media.volume':
       return v.volume === action.value;
     case 'ambient.light':
@@ -159,8 +161,82 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
     };
   }
 
-  const active = initial[signal]!;
   const reminder = baseline.reminder;
+  if (reminder?.kind === 'pet') {
+    const countAlerts = (s: RunSnapshot) => count(s, 'reminder');
+    const monitor = (run = create()) => {
+      run.setSignals({ petPresent: true });
+      run.step(hold + baseline.actions.length);
+      return run;
+    };
+    test('presence', '确认宠物在舱后才准备空调', '触发边界', () => {
+      const r = create();
+      expect(count(r.step(10), 'accepted') === 0, '未确认宠物在舱就发出动作');
+      const s = monitor(r).snapshot();
+      expect(
+        s.status === 'waiting' && baseline.actions.every((a) => actionsMatch(s, a)),
+        '准备动作未达到基线',
+      );
+      return '确认后才启动并进入监测';
+    });
+    test('temperature', '温度达到阈值提醒一次且可重放', '监测', () => {
+      const r = monitor();
+      expect(
+        countAlerts(r.setSignals({ temperature: reminder.maxTemperature - 1 })) === 0,
+        '温度未到阈值就提醒',
+      );
+      const s = r.setSignals({ temperature: reminder.maxTemperature });
+      expect(countAlerts(s) === 1 && countAlerts(r.step(10)) === 1, '未在阈值提醒或重复提醒');
+      expect(
+        JSON.stringify(replayEvidence(s).snapshot().events) === JSON.stringify(s.events),
+        '重放不一致',
+      );
+      return '温度边界和提醒可重放';
+    });
+    test('battery', '低电量或电量未知时提醒', '监测', () => {
+      const r = monitor();
+      expect(
+        countAlerts(r.setSignals({ batteryPercent: reminder.minBatteryPercent + 1 })) === 0,
+        '电量未到阈值就提醒',
+      );
+      expect(
+        countAlerts(r.setSignals({ batteryPercent: reminder.minBatteryPercent })) === 1,
+        '低电量未提醒',
+      );
+      const s = monitor(create({ ...initial, batteryPercent: undefined })).snapshot();
+      expect(
+        s.events.some((e) => e.kind === 'reminder' && e.detail.includes('电量未知')),
+        '未知电量未提醒',
+      );
+      return '包含等于阈值和未知状态';
+    });
+    test('climate-failure', '空调回读丢失时提醒', '故障', () => {
+      latest = new CabinRuntime(scenario, initial, 'climate.power:feedback-lost');
+      latest.setSignals({ petPresent: true });
+      const s = latest.step(60);
+      expect(s.status === 'uncertain' && countAlerts(s) === 1, '空调未知未提醒');
+      return '空调未确认时保留未知结果并提示';
+    });
+    test('exit', '离舱或驶离后结束监测', '运行守卫', () => {
+      for (const patch of [{ petPresent: false }, { gear: 'D' }] as const) {
+        const r = monitor();
+        const s = r.setSignals(patch);
+        expect(s.status === 'stopped' && countAlerts(s) === 0, '退出时监测未停止');
+      }
+      return '停车和在舱状态贯穿监测';
+    });
+    return {
+      scenario: structuredClone(scenario),
+      contractVersion: '1.1',
+      baseline: `${baseline.name} · 固定监测基线 v1`,
+      passed: cases.filter((c) => c.passed).length,
+      total: cases.length,
+      cases,
+    };
+  }
+
+  if (signal === 'petPresent') throw new Error('宠物监测基线缺少提醒');
+  const active = initial[signal]!;
   if (reminder) {
     const readyTime = hold + baseline.actions.length;
     const atDue = (run: CabinRuntime) =>
@@ -468,7 +544,9 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
         ? { capability: 'ambient.light', value: 25 }
         : first === 'window.close'
           ? { capability: 'window.close', value: true }
-          : { capability: 'climate.temperature', value: 27 };
+          : first === 'mirror.heat'
+            ? { capability: 'mirror.heat', value: false }
+            : { capability: 'climate.temperature', value: 27 };
     r.manual(manual);
     const s = r.step(90);
     expect(actionsMatch(s, manual), '自动化覆盖了用户手动设定');
