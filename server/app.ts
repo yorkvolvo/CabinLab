@@ -2,6 +2,7 @@ import express from 'express';
 import packageInfo from '../package.json';
 import { compile, compileRequestSchema, type ProviderConfig } from './provider';
 import { CompileError } from '../src/domain/compiler';
+import { scenePackagesRouter } from './scene-packages';
 
 export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch) {
   const app = express();
@@ -26,6 +27,7 @@ export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch)
     }
     next();
   });
+  app.use('/api', scenePackagesRouter());
   app.use(express.json({ limit: '24kb' }));
   app.get('/api/health', (_req, res) =>
     res.json({

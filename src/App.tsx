@@ -11,6 +11,7 @@ import {
   Check,
   ChevronRight,
   CircleHelp,
+  CarFront,
   CloudRain,
   Code2,
   Download,
@@ -68,6 +69,9 @@ import {
 } from './domain/runtime';
 import { verifyScenario, type VerificationReport } from './domain/verification';
 import Cabin from './components/Cabin';
+import MyScenes from './components/MyScenes';
+import NapRelease from './components/NapRelease';
+import { useReminderAudio } from './components/useReminderAudio';
 import Verification from './components/Verification';
 import VersionComparison, { ScenarioDiff } from './components/VersionComparison';
 import EvidenceInspector from './components/EvidenceInspector';
@@ -143,7 +147,7 @@ export default function App() {
   const [providerMode, setProviderMode] = useState<'demo' | 'model' | 'openai' | 'offline'>(
     'offline',
   );
-  const [tab, setTab] = useState<'workbench' | 'verification' | 'catalog' | 'evidence'>(
+  const [tab, setTab] = useState<'workbench' | 'verification' | 'catalog' | 'evidence' | 'vehicle'>(
     'workbench',
   );
   const [vehicle, setVehicle] = useState<Vehicle>(() => previewVehicle(selected));
@@ -161,8 +165,7 @@ export default function App() {
   const draftVersion = useRef(0);
   const draftRevision = useRef(0);
   const savingDraft = useRef(false);
-  const reminderAudio = useRef<AudioContext | null>(null);
-  const playedReminder = useRef('');
+  const reminderAudio = useReminderAudio(snapshot);
   const scenario = draft ?? selected;
   const currentVersions = versions.filter((s) => s.templateId === selected.templateId);
   const signal = scenario.trigger.signal;
@@ -261,46 +264,9 @@ export default function App() {
     }, 500);
     return () => clearInterval(timer);
   }, [playing]);
-  useEffect(
-    () => () => {
-      const context = reminderAudio.current;
-      reminderAudio.current = null;
-      if (context) void context.close().catch(() => {});
-    },
-    [],
-  );
-  useEffect(() => {
-    if (!snapshot || !latestReminder) return;
-    const marker = `${snapshot.runId}:${latestReminder.index}`;
-    if (playedReminder.current === marker) return;
-    playedReminder.current = marker;
-    const context = reminderAudio.current;
-    if (context?.state !== 'running') return;
-    for (const [index, frequency] of [660, 880].entries()) {
-      const tone = context.createOscillator();
-      const gain = context.createGain();
-      const startAt = context.currentTime + index * 0.22;
-      tone.frequency.value = frequency;
-      gain.gain.setValueAtTime(0.12, startAt);
-      gain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.18);
-      tone.connect(gain).connect(context.destination);
-      tone.start(startAt);
-      tone.stop(startAt + 0.18);
-      tone.onended = () => {
-        tone.disconnect();
-        gain.disconnect();
-      };
-    }
-  }, [snapshot, latestReminder]);
-
   function enableReminderAudio() {
     if (!selected.reminder && !hasWindowResultReminder(selected)) return;
-    try {
-      reminderAudio.current ??= new AudioContext();
-      void reminderAudio.current.resume().catch(() => {});
-    } catch {
-      /* 视觉提醒仍可使用。 */
-    }
+    reminderAudio.enable();
   }
 
   function haltAndReset(next: Scenario = selected) {
@@ -501,8 +467,7 @@ export default function App() {
       return;
     }
     const next = runtime.current.snapshot();
-    const event = next.events.filter((item) => item.kind === 'reminder').at(-1);
-    if (event) playedReminder.current = `${next.runId}:${event.index}`;
+    reminderAudio.silence(next);
     setSnapshot(next);
     setVehicle(next.vehicle);
     setToast('已按原始状态、故障和输入轨迹重放，执行证据可复现。');
@@ -621,6 +586,12 @@ export default function App() {
           <Upload size={17} />
           证据复核
         </button>
+        <button
+          className={`nav-item ${tab === 'vehicle' ? 'active' : ''}`}
+          onClick={() => setTab('vehicle')}
+        >
+          <CarFront size={17} /> 我的场景
+        </button>
         <div className="nav-section-heading">
           <span className="nav-label">场景库</span>
           <span className="small muted">{Object.keys(templates).length} 个模板</span>
@@ -693,7 +664,9 @@ export default function App() {
                   ? '验证报告'
                   : tab === 'evidence'
                     ? '证据复核'
-                    : '场景工作台'}
+                    : tab === 'vehicle'
+                      ? '我的场景'
+                      : '场景工作台'}
             </span>
           </div>
           <div className="topbar-right">
@@ -723,7 +696,9 @@ export default function App() {
                     ? '能力有边界，执行有依据。'
                     : tab === 'verification'
                       ? '让每一次执行，都有证据。'
-                      : '把想法，变成可验证的场景。'}
+                      : tab === 'vehicle'
+                        ? '我的场景'
+                        : '把想法，变成可验证的场景。'}
               </h1>
               <p>
                 {tab === 'evidence'
@@ -732,29 +707,36 @@ export default function App() {
                     ? `${Object.keys(catalog).length} 个白名单能力 · 参数校验 · 前置条件 · 状态回读`
                     : tab === 'verification'
                       ? '使用独立产品基线，验证正常路径、边界条件和异常行为。'
-                      : '用自然语言编排，在虚拟座舱预演，带着证据启程。'}
+                      : tab === 'vehicle'
+                        ? '模拟车端。点选已安装的场景，或输入模拟语音指令启动。'
+                        : '用自然语言编排，在虚拟座舱预演，带着证据启程。'}
               </p>
             </div>
-            <button
-              className="button secondary export-top"
-              onClick={() => {
-                const name = `cabinlab-${selected.id}-v${selected.version}.json`;
-                const experiment = {
-                  format: 'cabinlab.experiment',
-                  schemaVersion: 1,
-                  scenario: selected,
-                  verification: report,
-                } as const;
-                if (snapshot) exportEvidence(name, { ...experiment, run: snapshot });
-                else downloadJson(name, { ...experiment, run: null });
-              }}
-            >
-              <Download size={14} />
-              导出实验
-            </button>
+            {tab !== 'vehicle' && (
+              <button
+                className="button secondary export-top"
+                onClick={() => {
+                  const name = `cabinlab-${selected.id}-v${selected.version}.json`;
+                  const experiment = {
+                    format: 'cabinlab.experiment',
+                    schemaVersion: 1,
+                    scenario: selected,
+                    verification: report,
+                  } as const;
+                  if (snapshot) exportEvidence(name, { ...experiment, run: snapshot });
+                  else downloadJson(name, { ...experiment, run: null });
+                }}
+              >
+                <Download size={14} />
+                导出实验
+              </button>
+            )}
           </div>
 
-          {tab === 'evidence' ? (
+          <div hidden={tab !== 'vehicle'}>
+            <MyScenes visible={tab === 'vehicle'} />
+          </div>
+          {tab === 'vehicle' ? null : tab === 'evidence' ? (
             <EvidenceInspector />
           ) : tab === 'catalog' ? (
             <div className="catalog-grid">
@@ -851,6 +833,14 @@ export default function App() {
                   </button>
                 </div>
               </div>
+              {selected.templateId === 'nap' && !draft && (
+                <NapRelease
+                  key={selected.version}
+                  scenario={selected}
+                  run={snapshot}
+                  openVehicle={() => setTab('vehicle')}
+                />
+              )}
               <VersionComparison
                 key={`${selected.templateId}-${selected.version}`}
                 scenario={selected}

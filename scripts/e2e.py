@@ -799,6 +799,74 @@ with sync_playwright() as p:
     page.screenshot(path=str(ARTIFACTS / "evidence-mobile.png"), full_page=True)
     passed("390px 下版本对照与证据导入可操作，失败运行不会被解释成全部成功")
 
+    studio_context = browser.new_context(viewport={"width": 1536, "height": 1150})
+    car_context = browser.new_context(viewport={"width": 390, "height": 844})
+    studio = studio_context.new_page()
+    car = car_context.new_page()
+    car.add_init_script("""window.vehicleTones = 0;
+      const startTone = OscillatorNode.prototype.start;
+      OscillatorNode.prototype.start = function (...args) {
+        window.vehicleTones++;
+        return startTone.apply(this, args);
+      };""")
+    studio.goto(BASE_URL)
+    car.goto(BASE_URL)
+    car.get_by_role("button", name="我的场景", exact=True).click()
+    expect(car.get_by_text("车端尚未收到场景包。", exact=False)).to_be_visible()
+    studio.locator(".scenario-nav").filter(has_text="定时午休").click()
+    studio.get_by_role("spinbutton", name="唤醒时间").fill("600")
+    studio.get_by_role("button", name="确认参数并保存版本", exact=True).click()
+    expect(studio.get_by_label("场景版本", exact=True)).to_have_value("2")
+    publish = studio.get_by_role("button", name="发布场景包", exact=True)
+    expect(publish).to_be_disabled()
+    for _ in range(6):
+        studio.get_by_role("button", name="单步前进一秒", exact=True).click()
+    expect(publish).to_be_disabled()
+    studio.get_by_role("button", name="快进到唤醒", exact=True).click()
+    publish.click()
+    expect(studio.get_by_text("已发布定时午休 v2", exact=True)).to_be_visible()
+    with studio.expect_download() as downloaded:
+        studio.get_by_role("button", name="导出场景包", exact=True).click()
+    pack_path = ARTIFACTS / "nap-scene-package.json"
+    downloaded.value.save_as(pack_path)
+    pack = json.loads(pack_path.read_text())
+    assert pack["version"] == 2 and pack["scenario"]["reminder"]["afterSeconds"] == 600
+    car.get_by_role("button", name="刷新车端场景", exact=True).click()
+    expect(car.get_by_text("车端尚未收到场景包。", exact=False)).to_be_visible()
+    studio.get_by_role("button", name="下发到模拟车端", exact=True).click()
+    expect(studio.get_by_text("v2 已下发到模拟车端", exact=True)).to_be_visible()
+    car.get_by_role("button", name="刷新车端场景", exact=True).click()
+    expect(car.get_by_text("已安装 v2", exact=True)).to_be_visible()
+    assert car.evaluate("document.documentElement.scrollWidth <= innerWidth")
+
+    for via, expected_seconds, expected_tones in [("touch", 600, 2), ("voice", 900, 4)]:
+        if via == "touch":
+            car.get_by_role("button", name="点选启动", exact=True).click()
+        else:
+            car.get_by_label("模拟语音识别文本", exact=True).fill("开始午休 15 分钟")
+            car.get_by_role("button", name="语音启动", exact=True).click()
+        for _ in range(6):
+            car.get_by_role("button", name="车端单步", exact=True).click()
+        car.get_by_role("button", name="快进到车端唤醒", exact=True).click()
+        expect(car.get_by_role("alert")).to_have_text("午休时间到，请醒来")
+        expect(car.get_by_text("座椅、空调和媒体已恢复原设置", exact=True)).to_be_visible()
+        car.wait_for_function("expected => window.vehicleTones === expected", arg=expected_tones)
+        with car.expect_download() as downloaded:
+            car.get_by_role("button", name="导出车端运行证据", exact=True).click()
+        path = ARTIFACTS / f"nap-vehicle-{via}.json"
+        downloaded.value.save_as(path)
+        result = json.loads(path.read_text())
+        assert result["runId"].startswith(f"vehicle-{via}-nap-v2-")
+        assert result["scenario"]["version"] == 2 and result["vehicle"] == result["initialState"]
+        assert result["scenario"]["reminder"]["afterSeconds"] == expected_seconds
+        assert next(e["time"] for e in result["events"] if e["kind"] == "reminder") == 6 + expected_seconds
+    car.reload()
+    car.get_by_role("button", name="我的场景", exact=True).click()
+    expect(car.get_by_text("已安装 v2", exact=True)).to_be_visible()
+    studio_context.close()
+    car_context.close()
+    passed("午休版本发布与下发分离，车端点选和模拟语音均唤醒并恢复设置")
+
     assert not errors, errors
     passed("浏览器无未捕获 JavaScript 异常")
     context.close()
