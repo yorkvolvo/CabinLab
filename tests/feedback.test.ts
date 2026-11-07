@@ -1,17 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CabinRuntime, initialVehicle, replayEvidence } from '../src/domain/runtime';
+import {
+  CabinRuntime,
+  initialVehicle,
+  previewVehicle,
+  replayEvidence,
+} from '../src/domain/runtime';
 import { compileDemo } from '../src/domain/compiler';
 import { inspectEvidence } from '../src/domain/evidence';
 import { resourceOf, type TemplateId } from '../src/domain/scenario';
 import { cloneTemplate, templates } from '../src/domain/templates';
 
-for (const id of ['rest', 'reading', 'refresh'] as TemplateId[]) {
+for (const id of Object.keys(templates) as TemplateId[]) {
   const scenario = cloneTemplate(id);
+  const initial = previewVehicle(scenario);
   const capability = scenario.actions[0].capability;
   test(`${id} 请求被拒绝，不得记为接受或达成，导出结果可独立复核`, () => {
-    const result = new CabinRuntime(scenario, initialVehicle, `${capability}:rejected`).step(90);
+    const result = new CabinRuntime(scenario, initial, `${capability}:rejected`).step(90);
     assert.equal(result.status, 'partial');
     assert.equal(result.events.filter((event) => event.kind === 'rejected').length, 1);
     assert.equal(
@@ -24,7 +30,7 @@ for (const id of ['rest', 'reading', 'refresh'] as TemplateId[]) {
     assert.equal(inspectEvidence(JSON.stringify(result)).replayed.status, 'partial');
   });
   test(`${id} 回读丢失保留最后已知状态，不再控制同一设备`, () => {
-    const runtime = new CabinRuntime(scenario, initialVehicle, `${capability}:feedback-lost`);
+    const runtime = new CabinRuntime(scenario, initial, `${capability}:feedback-lost`);
     const result = runtime.step(90);
     assert.equal(result.status, 'uncertain');
     const unknown = result.events.filter((event) => event.kind === 'unknown');
@@ -34,7 +40,7 @@ for (const id of ['rest', 'reading', 'refresh'] as TemplateId[]) {
     assert.equal(unknown.length, 1);
     assert.equal(accepted.length, 1);
     assert.equal(unknown[0].time - accepted[0].time, scenario.timeoutSeconds);
-    assert.deepEqual(unknown[0].state, initialVehicle);
+    assert.deepEqual(unknown[0].state, initial);
     assert.equal(
       result.events.some(
         (event) =>

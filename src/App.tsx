@@ -30,6 +30,7 @@ import {
   Thermometer,
   Upload,
   WandSparkles,
+  Wind,
   X,
 } from 'lucide-react';
 import {
@@ -44,7 +45,7 @@ import { assumptionsFor, type CompileResult } from './domain/compiler';
 import {
   CabinRuntime,
   faultSchema,
-  initialVehicle,
+  previewVehicle,
   isTerminal,
   replayEvidence,
   runStatusLabels as statusLabels,
@@ -59,7 +60,14 @@ import VersionComparison, { ScenarioDiff } from './components/VersionComparison'
 import EvidenceInspector from './components/EvidenceInspector';
 import { downloadJson, readVersions, storageKey } from './storage';
 
-const icons = { rest: Moon, reading: BookOpen, refresh: Leaf };
+const icons = {
+  rest: Moon,
+  reading: BookOpen,
+  refresh: Leaf,
+  warmup: Thermometer,
+  cooldown: Wind,
+  night: Moon,
+};
 const eventLabels = {
   armed: '就绪',
   condition: '计时',
@@ -93,7 +101,7 @@ export default function App() {
   const [tab, setTab] = useState<'workbench' | 'verification' | 'catalog' | 'evidence'>(
     'workbench',
   );
-  const [vehicle, setVehicle] = useState<Vehicle>({ ...initialVehicle });
+  const [vehicle, setVehicle] = useState<Vehicle>(() => previewVehicle(selected));
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [playing, setPlaying] = useState(false);
   const [fault, setFault] = useState<Fault>('none');
@@ -110,6 +118,7 @@ export default function App() {
   const currentSignal = signalLabels[scenario.trigger.signal];
   const active = snapshot && !isTerminal(snapshot.status);
   const draftErrors = draft ? validateScenario(draft).errors : [];
+  const manualLight = selected.actions.some((action) => action.capability === 'ambient.light');
 
   useEffect(() => {
     if (timeline.current) timeline.current.scrollTop = timeline.current.scrollHeight;
@@ -186,12 +195,12 @@ export default function App() {
     return () => clearInterval(timer);
   }, [playing]);
 
-  function haltAndReset() {
+  function haltAndReset(next: Scenario = selected) {
     runtime.current?.cancel();
     runtime.current = null;
     setPlaying(false);
     setSnapshot(null);
-    setVehicle({ ...initialVehicle });
+    setVehicle(previewVehicle(next));
     setReport(null);
   }
   function selectScenario(next: Scenario) {
@@ -199,7 +208,7 @@ export default function App() {
     compileAbort.current?.abort();
     compileAbort.current = null;
     setCompiling(false);
-    haltAndReset();
+    haltAndReset(next);
     setSelected(next);
     setDraft(null);
     setPrompt(templates[next.templateId].sourcePrompt);
@@ -245,7 +254,7 @@ export default function App() {
       if (id !== requestId.current) return;
       const parsed = validateScenario(data.draft);
       if (!parsed.scenario) throw new Error('返回的场景结构不合法，已阻止加载');
-      haltAndReset();
+      haltAndReset(parsed.scenario);
       setDraft({ ...parsed.scenario, confirmed: false });
       setCompileMessage(data.message);
       setProviderMode(data.mode);
@@ -305,7 +314,7 @@ export default function App() {
       ...matching.slice(-29),
       next,
     ]);
-    haltAndReset();
+    haltAndReset(next);
     setSelected(next);
     setDraft(null);
     setFault('none');
@@ -367,10 +376,9 @@ export default function App() {
     } else setVehicle((prev) => ({ ...prev, ...patch }));
   }
   function manualOverride() {
-    const action: Action =
-      selected.templateId === 'reading'
-        ? { capability: 'ambient.light', value: 25 }
-        : { capability: 'climate.temperature', value: 27 };
+    const action: Action = manualLight
+      ? { capability: 'ambient.light', value: 25 }
+      : { capability: 'climate.temperature', value: 27 };
     if (runtime.current && active) {
       const next = runtime.current.manual(action);
       setSnapshot(next);
@@ -465,7 +473,7 @@ export default function App() {
         </button>
         <div className="nav-section-heading">
           <span className="nav-label">场景库</span>
-          <span className="small muted">3 个模板</span>
+          <span className="small muted">{Object.keys(templates).length} 个模板</span>
         </div>
         <div className="scenario-list">
           {Object.values(templates).map((item, index) => {
@@ -483,7 +491,18 @@ export default function App() {
                 <Icon size={16} />
                 <span>
                   {item.name}
-                  <small>{['降温 / 音乐', '灯光 / 媒体', '空调 / 通风'][index]}</small>
+                  <small>
+                    {
+                      [
+                        '降温 / 音乐',
+                        '灯光 / 媒体',
+                        '空调 / 通风',
+                        '暖风 / 预热',
+                        '降温 / 送风',
+                        '柔光 / 白噪音',
+                      ][index]
+                    }
+                  </small>
                 </span>
                 <span className="mono scenario-index">0{index + 1}</span>
               </button>
@@ -1106,7 +1125,7 @@ export default function App() {
                         </label>
                         <button className="manual-button" onClick={manualOverride}>
                           <SlidersHorizontal size={12} />
-                          {selected.templateId === 'reading' ? '手动设灯 25%' : '手动设温 27°C'}
+                          {manualLight ? '手动设灯 25%' : '手动设温 27°C'}
                         </button>
                       </div>
                     </div>

@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { createApp } from '../server/app';
 import { compile, configFromEnv, type ProviderConfig } from '../server/provider';
 import { cloneTemplate } from '../src/domain/templates';
-import { CompileError } from '../src/domain/compiler';
+import { CompileError, modelContext } from '../src/domain/compiler';
 
 const request = { prompt: '停车休息，太热就开空调', templateId: 'rest' };
 const modelConfig: ProviderConfig = {
@@ -271,7 +271,7 @@ test('模型修改请求携带完整基准，未提及字段保留且必须重�
     async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       const context = JSON.parse(body.messages[1].content);
-      assert.deepEqual(context.baseScenario, baseScenario);
+      assert.deepEqual(context.baseScenario, modelContext(baseScenario));
       assert.equal(context.instruction, '把持续时间改为 8 秒');
       return modelResponse({
         ...baseScenario,

@@ -209,6 +209,35 @@ with sync_playwright() as p:
     expect(page.get_by_text("当前验证全部通过", exact=True)).to_be_visible()
     passed("版本回退恢复通过，运行中切换场景会停止旧时钟，三个模板均可运行")
 
+    for name, expected in [
+        ("低温暖舱", {"targetTemperature": 26, "fan": 2}),
+        ("强力降温", {"targetTemperature": 22, "fan": 5, "recirculation": False}),
+        ("夜间放松", {"light": 20, "track": "自然白噪音", "volume": 12}),
+    ]:
+        select_template(name)
+        steps(12)
+        expect(page.locator(".run-status")).to_contain_text("执行完成")
+        run = export_run(f"run-{name}.json")
+        assert all(run["vehicle"][key] == value for key, value in expected.items())
+        page.get_by_role("button", name="运行全部验证", exact=True).click()
+        expect(page.get_by_text("当前验证全部通过", exact=True)).to_be_visible()
+        assert page.locator(".check-item.passed").count() == 22
+    passed("新增暖舱、强力降温、夜间放松可预演，各通过 22 项固定基线")
+
+    migration_context = browser.new_context()
+    old_versions = [
+        {**successful["scenario"], "version": 7, "name": "我保存的午休"},
+        reading["scenario"], refresh["scenario"],
+    ]
+    migration_context.add_init_script("localStorage.setItem('cabinlab.scenarios.v1', " + json.dumps(json.dumps(old_versions)) + ");")
+    migration_page = migration_context.new_page()
+    migration_page.goto(BASE_URL)
+    expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
+    assert migration_page.locator(".scenario-nav").count() == 6
+    expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
+    migration_context.close()
+    passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
+
     select_template("午间休憩")
     pending_routes = []
     page.route("**/api/compile", lambda route: pending_routes.append(route))
@@ -405,6 +434,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+    assert page.locator(".scenario-nav").count() == 6
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

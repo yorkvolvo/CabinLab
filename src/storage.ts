@@ -5,12 +5,16 @@ export const storageKey = 'cabinlab.scenarios.v1';
 export function readVersions(): Scenario[] {
   try {
     const raw: unknown = JSON.parse(localStorage.getItem(storageKey) || 'null');
-    if (Array.isArray(raw) && raw.length <= 90) {
+    if (Array.isArray(raw) && raw.length <= Object.keys(templates).length * 30) {
       const valid = raw
         .map((s) => validateScenario(s).scenario)
         .filter((s): s is Scenario => Boolean(s?.confirmed));
-      if (Object.keys(templates).every((id) => valid.some((s) => s.templateId === id)))
-        return valid;
+      return [
+        ...valid,
+        ...Object.values(templates).filter(
+          (template) => !valid.some((scenario) => scenario.templateId === template.templateId),
+        ),
+      ];
     }
   } catch {
     /* 无效本地缓存不进入执行器。 */

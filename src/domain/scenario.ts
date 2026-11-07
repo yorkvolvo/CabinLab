@@ -24,7 +24,7 @@ export const scenarioSchema = z
   .object({
     schemaVersion: z.literal(1),
     id: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),
-    templateId: z.enum(['rest', 'reading', 'refresh']),
+    templateId: z.enum(['rest', 'reading', 'refresh', 'warmup', 'cooldown', 'night']),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
     sourcePrompt: z.string().min(1).max(2000),
@@ -35,13 +35,25 @@ export const scenarioSchema = z
         signal: z.enum(['temperature', 'illuminance', 'co2']),
         operator: z.enum(['gt', 'lt']),
         threshold: z.number().min(-50).max(10000),
-        holdSeconds: z.number().int().min(0).max(60),
+        holdSeconds: z
+          .number()
+          .int()
+          .min(0)
+          .max(60)
+          .describe('持续时间指 trigger.holdSeconds：触发条件连续成立的秒数，不是动作超时。'),
       })
       .strict(),
     guard: z.literal('parked'),
     actions: z.array(actionSchema).min(1).max(8),
     exit: z.literal('cancel-pending-no-restore'),
-    timeoutSeconds: z.number().int().min(2).max(10),
+    timeoutSeconds: z
+      .number()
+      .int()
+      .min(2)
+      .max(10)
+      .describe(
+        '动作超时指 timeoutSeconds：单个动作等待回读的秒数，只有明确要求修改动作超时时才改变。',
+      ),
     failurePolicy: z.literal('continue-independent'),
   })
   .strict();

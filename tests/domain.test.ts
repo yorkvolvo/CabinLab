@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CabinRuntime, initialVehicle, replayEvidence } from '../src/domain/runtime';
-import { cloneTemplate } from '../src/domain/templates';
+import { cloneTemplate, templates } from '../src/domain/templates';
 import { validateScenario, type Scenario, type TemplateId } from '../src/domain/scenario';
 import { verifyScenario } from '../src/domain/verification';
 import { compileDemo, parseModelDraft } from '../src/domain/compiler';
 
-for (const templateId of ['rest', 'reading', 'refresh'] as TemplateId[]) {
+for (const templateId of Object.keys(templates) as TemplateId[]) {
   const report = verifyScenario(cloneTemplate(templateId));
   for (const result of report.cases) {
     test(`${templateId}: ${result.name}`, () => assert.equal(result.passed, true, result.detail));

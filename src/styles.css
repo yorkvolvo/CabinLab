@@ -277,6 +277,7 @@ details summary::-webkit-details-marker {
   min-height: 100vh;
 }
 .sidebar {
+  overflow-y: auto;
   width: 196px;
   flex-shrink: 0;
   border-right: 1px solid var(--line);
@@ -2452,12 +2453,15 @@ main {
     margin: 0 !important;
   }
   .scenario-list {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
     width: 100%;
     margin: 12px 0 -3px;
   }
   .scenario-nav {
+    min-width: 0;
+    width: 100%;
     margin: 0;
     padding: 9px;
     gap: 7px;

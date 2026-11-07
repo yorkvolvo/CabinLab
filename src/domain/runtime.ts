@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   actionLabel,
   catalog,
+  signalLabels,
   resourceOf,
   validateScenario,
   type Action,
@@ -116,6 +117,15 @@ export const initialVehicle: Vehicle = {
   volume: 30,
   light: 0,
 };
+
+export function previewVehicle(scenario: Scenario): Vehicle {
+  const { signal, threshold, operator } = scenario.trigger;
+  const bounds = signalLabels[signal];
+  return {
+    ...initialVehicle,
+    [signal]: Math.max(bounds.min, Math.min(bounds.max, threshold + (operator === 'gt' ? 2 : -2))),
+  };
+}
 
 export const isParked = (v: Vehicle) => v.gear === 'P' && v.speed === 0;
 export const isTerminal = (status: RunStatus) => !['armed', 'executing'].includes(status);

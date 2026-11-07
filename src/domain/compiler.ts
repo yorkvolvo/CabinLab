@@ -1,5 +1,56 @@
 import { cloneTemplate, templates } from './templates';
-import { signalLabels, validateScenario, type Scenario } from './scenario';
+import { z } from 'zod';
+import { scenarioSchema, signalLabels, validateScenario, type Scenario } from './scenario';
+
+export const modelPatchSchema = scenarioSchema
+  .omit({
+    schemaVersion: true,
+    id: true,
+    templateId: true,
+    version: true,
+    confirmed: true,
+    sourcePrompt: true,
+    guard: true,
+    exit: true,
+    failurePolicy: true,
+    name: true,
+    description: true,
+  })
+  .partial()
+  .extend({ trigger: scenarioSchema.shape.trigger.partial().optional() });
+
+export function modelContext(scenario: Scenario) {
+  const { trigger, actions, timeoutSeconds } = scenario;
+  return { trigger, actions, timeoutSeconds };
+}
+
+export function parseModelModification(
+  value: unknown,
+  prompt: string,
+  base: Scenario,
+): CompileResult {
+  if (value && typeof value === 'object' && 'patch' in value) {
+    const { patch } = z.object({ patch: modelPatchSchema }).strict().parse(value);
+    return parseModelDraft(
+      {
+        ...base,
+        ...patch,
+        trigger: { ...base.trigger, ...patch.trigger },
+      },
+      prompt,
+    );
+  }
+  const result = parseModelDraft(value, prompt);
+  if (result.draft.templateId !== base.templateId || result.draft.id !== base.id)
+    throw new CompileError(
+      'provider_output',
+      '模型修改了场景归属，已阻止加载。请明确修改要求后重试。',
+      502,
+    );
+  if (result.draft.name !== base.name || result.draft.description !== base.description)
+    throw new Error('参数修改不能改写场景名称或说明');
+  return result;
+}
 
 export class CompileError extends Error {
   constructor(
@@ -66,13 +117,19 @@ export function compileDemo(prompt: string): CompileResult {
       'needs_clarification',
       '本地模板创建不提取自定义数值。请先选择示例，再切到“修改当前场景”，例如“把持续时间改为 8 秒”；也可以直接编辑参数。',
     );
-  const id = /阅读|看书|灯/.test(prompt)
-    ? 'reading'
-    : /空气|二氧化碳|外循环|清新/.test(prompt)
-      ? 'refresh'
-      : /休息|休憩|降温|太热|空调|音乐/.test(prompt)
-        ? 'rest'
-        : null;
+  const id = /暖舱|预热|偏冷|太冷/.test(prompt)
+    ? 'warmup'
+    : /强力降温|快速降温|闷热/.test(prompt)
+      ? 'cooldown'
+      : /夜间放松|夜间休息|白噪音/.test(prompt)
+        ? 'night'
+        : /阅读|看书|灯/.test(prompt)
+          ? 'reading'
+          : /空气|二氧化碳|外循环|清新/.test(prompt)
+            ? 'refresh'
+            : /休息|休憩|降温|太热|空调|音乐/.test(prompt)
+              ? 'rest'
+              : null;
   if (!id)
     throw new CompileError(
       'needs_clarification',

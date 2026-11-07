@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { compile, configFromEnv, type ProviderConfig } from '../server/provider';
 import { cloneTemplate } from '../src/domain/templates';
-import { CompileError } from '../src/domain/compiler';
+import { CompileError, modelContext } from '../src/domain/compiler';
 
 const config: ProviderConfig = {
   provider: 'anthropic',
@@ -81,7 +81,7 @@ test('原生 Messages 修改携带当前版本，结果保留归属并重新等�
       const body = JSON.parse(String(init?.body));
       assert.deepEqual(JSON.parse(body.messages[0].content), {
         instruction: '把持续时间改为 8 秒',
-        baseScenario,
+        baseScenario: modelContext(baseScenario),
       });
       return message({ ...baseScenario, trigger: { ...baseScenario.trigger, holdSeconds: 8 } });
     },
