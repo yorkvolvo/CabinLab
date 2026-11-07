@@ -26,6 +26,38 @@ test('默认使用 demo，即使存在 key 也不自动调用模型', async () =
   assert.equal(fetched, false);
   assert.equal(result.mode, 'demo');
 });
+test('OpenAI 直连只使用独立密钥和官方端点，启用 JSON 对象模式', async () => {
+  assert.throws(() => configFromEnv({ LLM_PROVIDER: 'openai' }), /OPENAI_API_KEY/);
+  const config = configFromEnv({
+    LLM_PROVIDER: 'openai',
+    OPENAI_API_KEY: 'direct-test-key',
+    OPENAI_MODEL: 'direct-test-model',
+    LLM_BASE_URL: 'https://gateway.example.test',
+    LLM_API_KEY: 'gateway-test-key',
+    LLM_SECONDARY_MODEL: 'gateway-test-model',
+  });
+  const urls: string[] = [];
+  const scene = cloneTemplate('rest');
+  for (const intent of ['create', 'modify'] as const) {
+    const result = await compile(
+      { ...request, intent, ...(intent === 'modify' ? { baseScenario: scene } : {}) },
+      config,
+      async (input, init) => {
+        urls.push(String(input));
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body.model, 'direct-test-model');
+        assert.deepEqual(body.response_format, { type: 'json_object' });
+        assert.match(body.messages[0].content, /JSON/);
+        assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer direct-test-key');
+        return modelResponse(
+          intent === 'modify' ? { patch: { trigger: { holdSeconds: 8 } } } : scene,
+        );
+      },
+    );
+    assert.equal(result.mode, 'model');
+  }
+  assert.deepEqual(urls, Array(2).fill('https://api.openai.com/v1/chat/completions'));
+});
 test('模型配置缺失和不安全的远程 HTTP 会被拒绝', () => {
   assert.throws(() => configFromEnv({ LLM_PROVIDER: 'unknown' }));
   assert.throws(() => configFromEnv({ LLM_PROVIDER: 'openai-compatible' }));

@@ -18,7 +18,7 @@ import { inspectEvidence } from '../src/domain/evidence';
 const config = configFromEnv({
   ...process.env,
   LLM_SECONDARY_MODEL: undefined,
-  OPENAI_API_KEY: undefined,
+  OPENAI_API_KEY: process.env.LLM_PROVIDER === 'openai' ? process.env.OPENAI_API_KEY : undefined,
 });
 assert.notEqual(config.provider, 'demo', '真实模型验收必须显式配置模型服务');
 const rounds = Number(process.argv[2] ?? 3);

@@ -31,6 +31,7 @@ export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch)
     res.json({
       status: 'ok',
       mode: config.provider === 'demo' ? 'demo' : 'model',
+      ...(config.provider === 'openai' ? { provider: 'openai' } : {}),
       version: packageInfo.version,
     }),
   );

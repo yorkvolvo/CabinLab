@@ -96,7 +96,17 @@ npm start
 cp .env.example .env
 ```
 
-编辑 `.env` 并重启服务：
+只使用 OpenAI 时，将本机 `.env` 设置为：
+
+```dotenv
+LLM_PROVIDER=openai
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5-mini
+```
+
+保存后重启服务。此模式使用 OpenAI 官方地址和独立密钥，工作台会显示「OpenAI 直连」。请求使用 JSON 对象模式，生成内容仍需通过 CabinLab 的场景校验。[Chat Completions 响应格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+
+使用 Chat Completions 兼容网关时，在 `.env` 填写以下配置并重启服务：
 
 ```dotenv
 LLM_PROVIDER=openai-compatible
@@ -190,7 +200,7 @@ npm run format:check   # 格式检查
 npm run format         # 统一格式
 ```
 
-自动测试使用 Node.js 自带测试框架，当前 **466 项**，包含固定场景基线、执行器、修改解析、证据校验、版本对照、模型协议和备用切换。HTTP 测试需要允许监听 loopback 临时端口。
+自动测试使用 Node.js 自带测试框架，当前 **467 项**，包含固定场景基线、执行器、修改解析、证据校验、版本对照、模型协议和备用切换。HTTP 测试需要允许监听 loopback 临时端口。
 
 真实模型的多轮验收单独运行，CI 不调用真实模型：
 

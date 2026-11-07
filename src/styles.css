@@ -1206,134 +1206,191 @@ main {
   padding: 4px 6px;
 }
 .cabin-view {
-  height: 315px;
-  position: relative;
-  overflow: hidden;
-  background: radial-gradient(ellipse at 50% 52%, #28363080 0, transparent 65%), #111a20;
+  padding: 12px;
+  background: #101a1e;
 }
-.cabin-grid {
+.cabin-stage {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border: 1px solid #30464a;
+  border-radius: 10px;
+  background: radial-gradient(ellipse at 50% 53%, #264646 0%, #17282c 48%, #111b20 82%);
+}
+.cabin-stage::before {
   position: absolute;
   inset: 0;
+  z-index: -1;
   background-image:
-    linear-gradient(#87a3ae08 1px, transparent 1px),
-    linear-gradient(90deg, #87a3ae08 1px, transparent 1px);
-  background-size: 22px 22px;
-  mask-image: linear-gradient(transparent, #000 35%, #000 70%, transparent);
+    linear-gradient(#83b5b514 1px, transparent 1px),
+    linear-gradient(90deg, #83b5b514 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse, #000, transparent 78%);
+  content: '';
 }
 .cabin-caption {
-  position: absolute;
-  z-index: 2;
-  top: 16px;
-  left: 18px;
-  right: 18px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-family: var(--mono);
-  font-size: 7px;
-  letter-spacing: 1.4px;
-  color: #8ea09d;
+  justify-content: space-between;
+  padding: 11px 13px 2px;
+  color: #a6bbb8;
+  font-size: 11px;
+  letter-spacing: 0.3px;
 }
-.cabin-caption > span:last-child {
-  margin-left: auto;
-  color: #506a73;
+.cabin-caption > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
-.cabin-caption .live-dot {
-  width: 4px;
-  height: 4px;
-  background: #829c88;
+.cabin-stage-status {
+  border: 1px solid #4b5e5c;
+  border-radius: 99px;
+  padding: 3px 8px;
+  background: #1b2a2c;
+}
+.cabin-stage-status .live-dot {
+  width: 5px;
+  height: 5px;
+  background: #91a8a6;
+}
+.cabin-active .cabin-stage-status {
+  border-color: #7ca372;
+  color: #d5efb7;
+}
+.cabin-active .cabin-stage-status .live-dot {
+  background: #bde98a;
+}
+.cabin-vehicle {
+  position: relative;
+  display: grid;
+  height: clamp(245px, 26vw, 304px);
+  place-items: center;
 }
 .car-diagram {
-  position: absolute;
-  top: 32px;
-  left: 50%;
-  transform: translateX(-50%);
-  height: 270px;
-  width: 185px;
-  filter: drop-shadow(0 15px 20px #00000033);
-}
-.device-tag {
-  position: absolute;
-  z-index: 3;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 9px 11px;
-  border: 1px solid #3b4d5266;
-  background: #1c282de8;
-  border-radius: 6px;
-  backdrop-filter: blur(7px);
-  min-width: 105px;
-  box-shadow: 0 4px 18px #00000016;
-  color: #839a9e;
-}
-.device-tag span {
   display: block;
-  color: #6f8b93;
-  font-size: 8px;
-  margin-bottom: 4px;
+  width: min(66%, 255px);
+  height: 100%;
+  filter: drop-shadow(0 10px 16px #030b0cbb);
 }
-.device-tag strong {
-  font-size: 10px;
-  color: #becac6;
-  font-weight: 500;
+.seat-shell {
+  fill: #2a4247;
+  stroke: #688581;
 }
-.device-tag.on {
-  border-color: #a6d57944;
-  color: #c1e798;
+.seat-head {
+  fill: #54716e;
+  stroke: #78918d;
 }
-.device-tag.on strong {
-  color: #c1dfac;
+.seat-trim {
+  stroke: #78918d;
+  opacity: 0.56;
 }
-.climate-tag {
-  top: 85px;
-  left: 20px;
+.seat-occupied .seat-shell {
+  fill: #496044;
+  stroke: #bddf9d;
 }
-.media-tag {
-  top: 178px;
-  right: 18px;
+.seat-heated .seat-shell {
+  fill: #624b35;
+  stroke: #f1bb78;
 }
-.light-tag {
-  top: 235px;
-  left: 22px;
-  padding: 7px 9px;
-  min-width: 96px;
-}
-.cabin-bottom {
+.cabin-seat {
   position: absolute;
-  left: 18px;
-  right: 18px;
-  bottom: 13px;
-  display: flex;
-  justify-content: space-between;
-  font-size: 8px;
-  color: #6c868d;
+  top: 53%;
+  min-width: 63px;
+  padding: 6px 9px;
+  border: 1px solid #465b5d;
+  border-radius: 7px;
+  background: #17272a;
+  color: #a8bab9;
+  font-size: 10px;
 }
-.cabin-bottom span {
+.cabin-seat strong {
+  display: block;
+  margin-top: 3px;
+  color: #e2ece7;
+  font-size: 12px;
+}
+.cabin-seat.occupied {
+  border-color: #829d70;
+}
+.cabin-seat.occupied strong {
+  color: #cdeaa9;
+}
+.cabin-seat-left {
+  left: clamp(8px, 4%, 28px);
+}
+.cabin-seat-right {
+  right: clamp(8px, 4%, 28px);
+  text-align: right;
+}
+.cabin-devices {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 8px;
+}
+.cabin-device {
+  min-width: 0;
+  padding: 8px 9px;
+  border: 1px solid #304348;
+  border-radius: 7px;
+  background: #182529;
+}
+.cabin-device > div {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  color: #a4b7b9;
+  font-size: 11px;
 }
-.equalizer {
+.cabin-device strong,
+.cabin-device small {
+  display: block;
+}
+.cabin-device strong {
+  margin-top: 5px;
+  color: #e0ebe4;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.cabin-device small {
+  margin-top: 3px;
+  color: #9db2b0;
+  font-size: 10px;
+}
+.cabin-device.on {
+  border-color: #658b71;
+  background: #1e322d;
+}
+.cabin-device.on > div,
+.cabin-device.on strong {
+  color: #d4eebb;
+}
+.cabin-feedback {
   display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 15px;
-  margin-left: 4px;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
 }
-.equalizer i {
-  width: 2px;
-  height: 8px;
-  background: #bfdf93;
-  animation: eq 1s infinite ease-in-out;
+.cabin-feedback > span {
+  padding: 4px 7px;
+  border: 1px solid #364a4c;
+  border-radius: 5px;
+  background: #182529;
+  color: #adbfbd;
+  font-size: 10px;
+  line-height: 1.35;
 }
-.equalizer i:nth-child(2) {
-  animation-delay: -0.4s;
+.cabin-feedback strong {
+  color: #e1eae4;
+  font-weight: 600;
 }
-.equalizer i:nth-child(3) {
-  animation-delay: -0.7s;
+.cabin-feedback .on {
+  border-color: #617f64;
 }
-.airflow path {
+.cabin-feedback .on strong {
+  color: #d2e9ac;
+}
+.cabin-active .airflow path {
   animation: flow 2.5s linear infinite;
 }
 .vehicle-readouts {
@@ -2139,15 +2196,6 @@ main {
     stroke-dashoffset: -48;
   }
 }
-@keyframes eq {
-  50% {
-    height: 15px;
-  }
-  0%,
-  100% {
-    height: 4px;
-  }
-}
 @keyframes appear {
   from {
     opacity: 0;
@@ -2165,23 +2213,6 @@ main {
   .workbench-grid {
     gap: 22px;
     grid-template-columns: minmax(310px, 1fr) minmax(440px, 1.6fr) minmax(275px, 0.9fr);
-  }
-  .cabin-view {
-    height: 350px;
-  }
-  .car-diagram {
-    height: 306px;
-    width: 210px;
-  }
-  .light-tag {
-    top: 265px;
-  }
-  .media-tag {
-    top: 196px;
-  }
-  .climate-tag {
-    top: 100px;
-    left: 25px;
   }
   .composer textarea {
     min-height: 145px;
@@ -2361,24 +2392,6 @@ main {
   .flow-body {
     padding-left: 17px;
     padding-right: 12px;
-  }
-  .device-tag {
-    min-width: 89px;
-    padding: 8px;
-    gap: 6px;
-  }
-  .climate-tag {
-    left: 12px;
-  }
-  .media-tag {
-    right: 12px;
-  }
-  .light-tag {
-    left: 12px;
-    min-width: 82px;
-  }
-  .device-tag strong {
-    font-size: 9px;
   }
   .simulation-controls {
     padding-left: 13px;
@@ -2652,35 +2665,6 @@ main {
   }
   .check-item summary {
     font-size: 11px;
-  }
-  .cabin-view {
-    height: 325px;
-  }
-  .car-diagram {
-    height: 285px;
-    width: 195px;
-  }
-  .climate-tag {
-    top: 90px;
-    left: 20px;
-  }
-  .media-tag {
-    top: 175px;
-    right: 20px;
-  }
-  .light-tag {
-    top: 244px;
-    left: 20px;
-  }
-  .device-tag {
-    padding: 9px 11px;
-    min-width: 105px;
-  }
-  .device-tag span {
-    font-size: 9px;
-  }
-  .device-tag strong {
-    font-size: 10px;
   }
   .vehicle-readouts {
     padding: 16px 0;

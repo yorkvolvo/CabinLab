@@ -136,7 +136,9 @@ export default function App() {
   const [compileIntent, setCompileIntent] = useState<'create' | 'modify'>('create');
   const [compileError, setCompileError] = useState(false);
   const [compiling, setCompiling] = useState(false);
-  const [providerMode, setProviderMode] = useState<'demo' | 'model' | 'offline'>('offline');
+  const [providerMode, setProviderMode] = useState<'demo' | 'model' | 'openai' | 'offline'>(
+    'offline',
+  );
   const [tab, setTab] = useState<'workbench' | 'verification' | 'catalog' | 'evidence'>(
     'workbench',
   );
@@ -188,7 +190,11 @@ export default function App() {
         if (!r.ok) throw new Error('服务不可用');
         return r.json();
       })
-      .then((data: { mode?: string }) => setProviderMode(data.mode === 'model' ? 'model' : 'demo'))
+      .then((data: { mode?: string; provider?: string }) =>
+        setProviderMode(
+          data.mode === 'model' ? (data.provider === 'openai' ? 'openai' : 'model') : 'demo',
+        ),
+      )
       .catch(() => {
         if (!controller.signal.aborted) setProviderMode('offline');
       });
@@ -357,7 +363,9 @@ export default function App() {
       draftRevision.current++;
       setDraft({ ...parsed.scenario, confirmed: false });
       setCompileMessage(data.message);
-      setProviderMode(data.mode);
+      setProviderMode((current) =>
+        current === 'openai' && data.mode === 'model' ? current : data.mode,
+      );
     } catch (e) {
       if (!controller.signal.aborted && id === requestId.current) {
         setCompileError(true);
@@ -679,11 +687,13 @@ export default function App() {
           <div className="topbar-right">
             <span className="mode-badge">
               <span className={`live-dot ${providerMode === 'offline' ? 'offline' : ''}`} />
-              {providerMode === 'model'
-                ? '模型服务已配置'
-                : providerMode === 'demo'
-                  ? '本地模板模式'
-                  : '服务连接中 / 离线'}
+              {providerMode === 'openai'
+                ? 'OpenAI 直连'
+                : providerMode === 'model'
+                  ? '模型服务已配置'
+                  : providerMode === 'demo'
+                    ? '本地模板模式'
+                    : '服务连接中 / 离线'}
             </span>
             <div className="avatar">CL</div>
           </div>
@@ -913,7 +923,7 @@ export default function App() {
                       </button>
                     )}
                     <p className="mode-hint">
-                      {providerMode === 'model'
+                      {providerMode === 'openai' || providerMode === 'model'
                         ? '服务端模型编译 · 执行前需要确认'
                         : '本地模板建议 · 未调用实时 AI'}
                     </p>
@@ -1351,21 +1361,6 @@ export default function App() {
                           </div>
                         </div>
                       )}
-                      {vehicle.frontDefrost !== undefined && (
-                        <p className="small muted" role="status">
-                          前挡除雾回读：{vehicle.frontDefrost ? '已开启' : '已关闭'}
-                        </p>
-                      )}
-                      {vehicle.driverHeat !== undefined && (
-                        <p className="small muted" role="status">
-                          主驾座椅加热回读：{vehicle.driverHeat} 档
-                        </p>
-                      )}
-                      {vehicle.mirrorHeat !== undefined && (
-                        <p className="small muted" role="status">
-                          后视镜加热回读：{vehicle.mirrorHeat ? '已开启' : '已关闭'}
-                        </p>
-                      )}
                       {reminder?.kind === 'pet' && (
                         <div className="reminder-controls" aria-label="宠物留舱模拟输入">
                           <label>
@@ -1495,9 +1490,6 @@ export default function App() {
                             />{' '}
                             窗路无障碍
                           </label>
-                          <small role="status">
-                            车窗回读：{vehicle.windowsClosed ? '四门全闭' : '未全闭'}
-                          </small>
                         </div>
                       )}
                       <div className="drive-controls">
