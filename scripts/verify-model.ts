@@ -15,7 +15,11 @@ import { parseMessagesStream } from '../server/messages';
 import { CabinRuntime, previewVehicle } from '../src/domain/runtime';
 import { inspectEvidence } from '../src/domain/evidence';
 
-const config = configFromEnv(process.env);
+const config = configFromEnv({
+  ...process.env,
+  LLM_SECONDARY_MODEL: undefined,
+  OPENAI_API_KEY: undefined,
+});
 assert.notEqual(config.provider, 'demo', '真实模型验收必须显式配置模型服务');
 const rounds = Number(process.argv[2] ?? 3);
 assert.ok(Number.isSafeInteger(rounds) && rounds > 0, '轮数必须为正整数');

@@ -59,6 +59,6 @@ armed → executing → [waiting] → completed / partial / uncertain
 
 服务默认绑定 `127.0.0.1`，API 检查同源 Origin，禁用缓存，限制请求体和同时编译数。它不是公网多用户服务；当前没有认证、按用户配额、分布式限流或可靠作业队列。
 
-错误码区分 `needs_clarification`、`provider_auth`、`provider_rate_limit`、`provider_timeout`、`provider_unavailable`、`provider_output` 等。同一截止时间贯穿请求、响应流读取与定向修复，取消也释放读取器。对上游错误只返回受控消息，不转发响应体或密钥。只对完整模型输出的 JSON 或参数校验失败做一次修复；不会自动重试网络、鉴权、限流、截断或用户取消。原生协议启用 SSE 传输保持连接，必须收到完整终态才解析候选；原始事件流限 4 MB，普通 JSON 限 100 KB，最终文本限 30000 字符。可按服务支持情况显式传递 reasoning_effort，并在提示词中保留对应强度。合约测试使用受控 fetch / 响应流；真实模型联调与模拟结果在验收记录中分别说明，网关配置和原始响应仅存本机。
+同一模型尝试的截止时间涵盖请求、响应流读取和一次定向修复。配置备用时，仅在鉴权、限流、连接、超时或服务不可用的错误后按顺序换模型。用户取消贯穿所有尝试。OpenAI 备用端点固定，使用独立密钥。对上游错误只返回受控消息。原生协议启用 SSE 并要求完整终态，原始事件流限 4 MB，普通 JSON 限 100 KB，最终文本限 30000 字符。模型协议和切换顺序均由受控响应测试验证。
 
 依赖锁定在 `package-lock.json`。`esbuild` 和 `minimatch` 的 overrides 使用已修复版本，已通过类型检查、lint、构建及浏览器验证；升级上游依赖后可以重新评估是否删除 overrides。

@@ -46,6 +46,8 @@ export type ProviderConfig = {
   apiKey?: string;
   timeoutMs?: number;
   reasoningEffort?: 'low' | 'high' | 'max';
+  secondaryModel?: string;
+  openaiFallback?: { apiKey: string; model: string };
 };
 
 async function readBoundedResponse(
@@ -102,6 +104,8 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ProviderConfig {
     throw new Error('非本地模型服务必须使用 HTTPS');
   if (url.username || url.password || url.search || url.hash)
     throw new Error('模型地址不能包含凭证、查询或片段');
+  const secondaryModel = env.LLM_SECONDARY_MODEL?.trim();
+  const openaiKey = env.OPENAI_API_KEY?.trim();
   return {
     provider,
     baseUrl: url.href.replace(/\/$/, ''),
@@ -113,6 +117,10 @@ export function configFromEnv(env: NodeJS.ProcessEnv): ProviderConfig {
     ...(env.LLM_REASONING_EFFORT
       ? { reasoningEffort: z.enum(['low', 'high', 'max']).parse(env.LLM_REASONING_EFFORT) }
       : {}),
+    ...(secondaryModel && secondaryModel !== env.LLM_MODEL ? { secondaryModel } : {}),
+    ...(openaiKey
+      ? { openaiFallback: { apiKey: openaiKey, model: env.OPENAI_MODEL?.trim() || 'gpt-5-mini' } }
+      : {}),
   };
 }
 
@@ -120,6 +128,51 @@ export async function compile(
   request: unknown,
   config: ProviderConfig,
   fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<CompileResult> {
+  const { secondaryModel, openaiFallback, ...primary } = config;
+  const attempts: { config: ProviderConfig; label?: string }[] = [{ config: primary }];
+  if (primary.provider !== 'demo') {
+    if (secondaryModel && secondaryModel !== primary.model)
+      attempts.push({ config: { ...primary, model: secondaryModel }, label: '网关备用模型' });
+    if (openaiFallback)
+      attempts.push({
+        config: {
+          provider: 'openai-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          ...openaiFallback,
+        },
+        label: 'OpenAI 备用模型',
+      });
+  }
+  for (const [index, attempt] of attempts.entries()) {
+    if (signal?.aborted) throw new CompileError('cancelled', '生成已取消。', 499);
+    try {
+      const result = await compileWithProvider(request, attempt.config, fetcher, signal);
+      if (attempt.label) result.message += ` 已使用${attempt.label}。`;
+      return result;
+    } catch (error) {
+      if (
+        index === attempts.length - 1 ||
+        signal?.aborted ||
+        !(error instanceof CompileError) ||
+        ![
+          'provider_unavailable',
+          'provider_timeout',
+          'provider_rate_limit',
+          'provider_auth',
+        ].includes(error.code)
+      )
+        throw error;
+    }
+  }
+  throw new Error('模型编译没有返回结果');
+}
+
+async function compileWithProvider(
+  request: unknown,
+  config: ProviderConfig,
+  fetcher: typeof fetch,
   signal?: AbortSignal,
   repairAttempt = false,
 ): Promise<CompileResult> {
@@ -204,11 +257,9 @@ export async function compile(
           502,
         );
       if (response.status === 429)
-        throw new CompileError(
-          'provider_rate_limit',
-          '模型服务暂时限流，请稍后重试。没有自动重试或额外模型调用。',
-          503,
-        );
+        throw new CompileError('provider_rate_limit', '模型服务暂时限流，请稍后重试。', 503);
+      if (response.status < 500 && ![404, 408].includes(response.status))
+        throw new CompileError('provider_request', '模型服务拒绝了当前请求，请检查模型配置。', 502);
       throw new CompileError(
         'provider_unavailable',
         '模型服务暂不可用，请检查服务地址或稍后重试。',
@@ -272,7 +323,7 @@ export async function compile(
     } catch (error) {
       if (error instanceof CompileError) throw error;
       if (!repairAttempt && !combined.aborted)
-        return await compile(request, config, fetcher, combined, true);
+        return await compileWithProvider(request, config, fetcher, combined, true);
       throw new CompileError(
         'provider_output',
         '模型返回的场景不符合格式或能力约束，已阻止加载。请调整需求后重试。',

@@ -4,6 +4,115 @@ import { compile, configFromEnv, type ProviderConfig } from '../server/provider'
 import { cloneTemplate } from '../src/domain/templates';
 import { modelContext, parseModelModification } from '../src/domain/compiler';
 
+const fallbackEnv = {
+  LLM_PROVIDER: 'anthropic',
+  LLM_BASE_URL: 'https://model.example.test',
+  LLM_MODEL: 'primary',
+  LLM_SECONDARY_MODEL: 'secondary',
+  LLM_API_KEY: 'gateway-fixture',
+  OPENAI_API_KEY: 'openai-fixture',
+};
+const fallbackRequest = { prompt: '停车休息时太热开空调', templateId: 'rest' };
+
+test('先尝试两个网关模型，再用独立密钥调用 OpenAI 官方端点', async () => {
+  const calls: string[] = [];
+  const base = cloneTemplate('rest');
+  const result = await compile(
+    { ...fallbackRequest, intent: 'modify', baseScenario: base },
+    configFromEnv(fallbackEnv),
+    async (url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const headers = new Headers(init?.headers);
+      calls.push(body.model);
+      assert.equal(init?.redirect, 'error');
+      if (body.model !== 'gpt-5-mini') {
+        assert.equal(url, 'https://model.example.test/v1/messages');
+        assert.equal(headers.get('x-api-key'), 'gateway-fixture');
+        assert.equal(headers.get('authorization'), null);
+        return new Response(null, { status: 503 });
+      }
+      assert.equal(url, 'https://api.openai.com/v1/chat/completions');
+      assert.equal(headers.get('authorization'), 'Bearer openai-fixture');
+      assert.equal(headers.get('x-api-key'), null);
+      assert.deepEqual(JSON.parse(body.messages[1].content).baseScenario, modelContext(base));
+      return Response.json({
+        choices: [{ message: { content: '{"patch":{"trigger":{"holdSeconds":8}}}' } }],
+      });
+    },
+  );
+  assert.deepEqual(calls, ['primary', 'secondary', 'gpt-5-mini']);
+  assert.equal(result.draft.trigger.holdSeconds, 8);
+  assert.equal(result.draft.confirmed, false);
+  assert.match(result.message, /OpenAI 备用模型/);
+});
+
+test('网关备用模型可用时不调用 OpenAI', async () => {
+  const calls: string[] = [];
+  const result = await compile(fallbackRequest, configFromEnv(fallbackEnv), async (_url, init) => {
+    const { model } = JSON.parse(String(init?.body));
+    calls.push(model);
+    return model === 'primary'
+      ? new Response(null, { status: 429 })
+      : Response.json({
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: JSON.stringify(cloneTemplate('rest')) }],
+        });
+  });
+  assert.deepEqual(calls, ['primary', 'secondary']);
+  assert.match(result.message, /网关备用模型/);
+});
+
+test('主模型超时后，备用请求使用自己的截止时间', async (t) => {
+  const deadline = new AbortController();
+  let timers = 0;
+  t.mock.method(AbortSignal, 'timeout', () =>
+    timers++ === 0 ? deadline.signal : new AbortController().signal,
+  );
+  const result = await compile(fallbackRequest, configFromEnv(fallbackEnv), async (_url, init) => {
+    const { model } = JSON.parse(String(init?.body));
+    if (model === 'primary') {
+      deadline.abort(new DOMException('deadline', 'TimeoutError'));
+      init?.signal?.throwIfAborted();
+    }
+    assert.equal(model, 'secondary');
+    assert.equal(init?.signal?.aborted, false);
+    return Response.json({
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: JSON.stringify(cloneTemplate('rest')) }],
+    });
+  });
+  assert.equal(timers, 2);
+  assert.match(result.message, /网关备用模型/);
+});
+
+test('请求被取消、上游要求澄清或拒绝参数时，不发送备用请求', async () => {
+  for (const expected of ['cancelled', 'needs_clarification', 'provider_request']) {
+    const controller = new AbortController();
+    let calls = 0;
+    await assert.rejects(
+      compile(
+        fallbackRequest,
+        configFromEnv(fallbackEnv),
+        async () => {
+          calls++;
+          if (expected === 'cancelled') {
+            controller.abort();
+            return new Response(null, { status: 503 });
+          }
+          if (expected === 'provider_request') return new Response(null, { status: 400 });
+          return Response.json({
+            stop_reason: 'end_turn',
+            content: [{ type: 'text', text: '{"clarification":"请补充触发温度"}' }],
+          });
+        },
+        controller.signal,
+      ),
+      { code: expected },
+    );
+    assert.equal(calls, 1);
+  }
+});
+
 test('修改请求复用基准结构，约束提示不重复发送整份生成 Schema', async () => {
   const config: ProviderConfig = {
     provider: 'anthropic',
