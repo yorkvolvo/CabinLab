@@ -49,6 +49,7 @@ import {
   validateScenario,
   type Action,
   type Scenario,
+  type TemplateId,
 } from './domain/scenario';
 import { cloneTemplate, templates } from './domain/templates';
 import { assumptionsFor, type CompileResult } from './domain/compiler';
@@ -123,6 +124,7 @@ const eventLabels = {
   'restore-skipped': '未恢复',
   completed: '结果',
 };
+const featuredTemplates = ['nap', 'charging', 'rainLink', 'homeReminder'] as const;
 
 export default function App() {
   const [versions, setVersions] = useState(readVersions);
@@ -134,6 +136,8 @@ export default function App() {
   const [prompt, setPrompt] = useState(templates[selected.templateId].sourcePrompt);
   const [compileMessage, setCompileMessage] = useState('');
   const [compileIntent, setCompileIntent] = useState<'create' | 'modify'>('create');
+  const [createTemplate, setCreateTemplate] = useState<TemplateId | null>(null);
+  const templatePicker = useRef<HTMLSelectElement>(null);
   const [compileError, setCompileError] = useState(false);
   const [compiling, setCompiling] = useState(false);
   const [providerMode, setProviderMode] = useState<'demo' | 'model' | 'openai' | 'offline'>(
@@ -320,6 +324,7 @@ export default function App() {
     setCompileMessage('');
     setCompileError(false);
     setCompileIntent('create');
+    setCreateTemplate(null);
     setFault('none');
     setTab('workbench');
   }
@@ -347,8 +352,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          templateId: selected.templateId,
+          templateId:
+            compileIntent === 'create' && createTemplate ? createTemplate : selected.templateId,
           intent: compileIntent,
+          ...(compileIntent === 'create' && createTemplate ? { templateLocked: true } : {}),
           ...(compileIntent === 'modify' ? { baseScenario: selected } : {}),
         }),
         signal: controller.signal,
@@ -392,6 +399,11 @@ export default function App() {
     setCompileError(false);
     setCompileMessage('');
   }
+  function chooseTemplate(next: TemplateId | null) {
+    const wasExample = createTemplate && prompt === templates[createTemplate].sourcePrompt;
+    setCreateTemplate(next);
+    updatePrompt(next ? templates[next].sourcePrompt : wasExample ? '' : prompt);
+  }
   function newRequest() {
     draftRevision.current++;
     cancelCompile();
@@ -400,9 +412,9 @@ export default function App() {
     setPrompt('');
     setDraft(null);
     setCompileIntent('create');
-    setCompileMessage(
-      '选择停车休息、阅读或空气清新需求。本地模板只提供已知示例建议；明确数值请使用“修改当前场景”。',
-    );
+    setCreateTemplate(null);
+    setCompileMessage('');
+    requestAnimationFrame(() => templatePicker.current?.focus());
   }
   async function confirmDraft() {
     if (!draft || savingDraft.current) return;
@@ -567,7 +579,7 @@ export default function App() {
           </span>
           <span>
             Cabin<span className="brand-light">Lab</span>
-            <small>场景试验场</small>
+            <small>场景工作室</small>
           </span>
         </a>
         <div className="workspace-label">
@@ -702,7 +714,7 @@ export default function App() {
           <div className="page-heading">
             <div>
               <div className="eyebrow">
-                <span className="tiny-line" /> SCENARIO PLAYGROUND
+                <span className="tiny-line" /> SCENARIO STUDIO
               </div>
               <h1>
                 {tab === 'evidence'
@@ -863,7 +875,7 @@ export default function App() {
                             setCompileIntent(intent);
                             updatePrompt(
                               intent === 'create'
-                                ? templates[selected.templateId].sourcePrompt
+                                ? templates[createTemplate ?? selected.templateId].sourcePrompt
                                 : '',
                             );
                           }}
@@ -872,6 +884,51 @@ export default function App() {
                         </button>
                       ))}
                     </div>
+                    {compileIntent === 'create' && (
+                      <div className="template-picker">
+                        <label htmlFor="create-template">
+                          <span>
+                            <Layers3 size={14} /> 从模板开始
+                          </span>
+                          <small>{Object.keys(templates).length} 个模板</small>
+                        </label>
+                        <select
+                          id="create-template"
+                          ref={templatePicker}
+                          aria-label="选择场景模板"
+                          value={createTemplate ?? ''}
+                          disabled={Boolean(draft)}
+                          onChange={(event) =>
+                            chooseTemplate((event.target.value || null) as TemplateId | null)
+                          }
+                        >
+                          <option value="">自由创建 · 按需求匹配</option>
+                          {Object.values(templates).map((template) => (
+                            <option key={template.templateId} value={template.templateId}>
+                              {template.name}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="template-shortcuts" role="group" aria-label="常用模板">
+                          {featuredTemplates.map((family) => (
+                            <button
+                              type="button"
+                              key={family}
+                              aria-pressed={createTemplate === family}
+                              disabled={Boolean(draft)}
+                              onClick={() => chooseTemplate(family)}
+                            >
+                              {templates[family].name}
+                            </button>
+                          ))}
+                        </div>
+                        <p>
+                          {createTemplate
+                            ? templates[createTemplate].description
+                            : '选一个模板带入示例需求，也可以直接描述你的场景。'}
+                        </p>
+                      </div>
+                    )}
                     {compileIntent === 'modify' && (
                       <p className="edit-context">
                         基于「{selected.name} · v{selected.version}」；只修改明确提到的参数。

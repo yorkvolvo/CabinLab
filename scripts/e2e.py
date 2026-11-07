@@ -528,6 +528,26 @@ with sync_playwright() as p:
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
 
+    page.get_by_role("button", name="编排新需求", exact=True).click()
+    picker = page.get_by_role("combobox", name="选择场景模板")
+    expect(picker).to_be_focused()
+    assert picker.locator("option").count() == 21
+    picker.select_option("preheat")
+    expect(page.get_by_label("自然语言需求", exact=True)).to_have_value(re.compile("创建预约暖舱"))
+    page.get_by_role("group", name="常用模板").get_by_role("button", name="雨天联动", exact=True).click()
+    expect(picker).to_have_value("rainLink")
+    expect(page.get_by_label("自然语言需求", exact=True)).to_have_value(re.compile("创建「雨天联动」"))
+    with page.expect_request("**/api/compile") as generation:
+        page.get_by_role("button", name="生成场景", exact=True).click()
+    assert generation.value.post_data_json["templateId"] == "rainLink"
+    assert generation.value.post_data_json["templateLocked"] is True
+    expect(page.get_by_text("待确认草案", exact=True)).to_be_visible()
+    expect(picker).to_be_disabled()
+    page.get_by_role("button", name="放弃本次修改", exact=True).click()
+    picker.select_option("")
+    expect(page.get_by_label("自然语言需求", exact=True)).to_have_value("")
+    passed("创建入口可选所有场景模板，常用模板快捷带入并锁定生成类型")
+
     shared = browser.new_context()
     left, right = shared.new_page(), shared.new_page()
     for tab in (left, right):

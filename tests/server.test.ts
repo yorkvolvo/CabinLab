@@ -26,6 +26,45 @@ test('默认使用 demo，即使存在 key 也不自动调用模型', async () =
   assert.equal(fetched, false);
   assert.equal(result.mode, 'demo');
 });
+test('选择模板后本地模式保留所选类型，自由创建仍按需求匹配', async () => {
+  const template = cloneTemplate('rainLink');
+  const locked = { templateId: 'rainLink', templateLocked: true, prompt: template.sourcePrompt };
+  const result = await compile(locked, { provider: 'demo' });
+  assert.equal(result.draft.templateId, 'rainLink');
+  await assert.rejects(
+    compile({ ...locked, prompt: '停车看书打开阅读灯' }, { provider: 'demo' }),
+    /与所选模板不匹配/,
+  );
+  const free = await compile({ ...request, prompt: '停车看书打开阅读灯' }, { provider: 'demo' });
+  assert.equal(free.draft.templateId, 'reading');
+});
+
+test('模型收到所选模板及其默认配置，返回其他模板时不给出草案', async () => {
+  const template = cloneTemplate('nap');
+  const calls: string[] = [];
+  await assert.rejects(
+    compile(
+      { templateId: 'nap', templateLocked: true, prompt: template.sourcePrompt },
+      modelConfig,
+      async (_url, init) => {
+        const { messages } = JSON.parse(String(init?.body));
+        calls.push(messages[0].content);
+        return modelResponse(cloneTemplate('rest'));
+      },
+    ),
+    /没有按所选模板生成/,
+  );
+  assert.equal(calls.length, 2);
+  for (const system of calls) {
+    assert.match(system, /用户已明确选择「定时午休」，必须使用 templateId=nap/);
+    assert.ok(
+      system.includes(
+        JSON.stringify({ ...modelContext(template), guard: template.guard, exit: template.exit }),
+      ),
+    );
+  }
+});
+
 test('OpenAI 直连只使用独立密钥和官方端点，启用 JSON 对象模式', async () => {
   assert.throws(() => configFromEnv({ LLM_PROVIDER: 'openai' }), /OPENAI_API_KEY/);
   const config = configFromEnv({

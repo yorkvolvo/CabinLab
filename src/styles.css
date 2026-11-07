@@ -658,6 +658,63 @@ main {
 .composer {
   padding-bottom: 15px;
 }
+.template-picker {
+  margin: 12px 15px 0;
+  padding: 10px;
+  border: 1px solid #3b5047;
+  border-radius: 7px;
+  background: #192722;
+}
+.template-picker label,
+.template-picker label > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.template-picker label {
+  justify-content: space-between;
+  color: #d1e8bf;
+  font-size: 12px;
+  font-weight: 600;
+}
+.template-picker label small,
+.template-picker p {
+  color: #a4b8ad;
+  font-size: 11px;
+  font-weight: 400;
+}
+.template-picker select {
+  width: 100%;
+  margin: 8px 0;
+  padding: 7px 8px;
+  border: 1px solid #41534d;
+  border-radius: 5px;
+  background: #131f20;
+  color: #e5ede6;
+  font-size: 12px;
+}
+.template-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.template-shortcuts button {
+  padding: 4px 7px;
+  border: 1px solid #45574c;
+  border-radius: 5px;
+  background: #202e29;
+  color: #c5d5cc;
+  font-size: 11px;
+}
+.template-shortcuts button[aria-pressed='true'] {
+  border-color: #92b978;
+  background: #344833;
+  color: #e0f5cc;
+}
+.template-picker p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
 .composer textarea {
   display: block;
   background: #11191e;
