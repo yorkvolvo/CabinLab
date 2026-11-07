@@ -648,6 +648,98 @@ main {
 .nap-release {
   margin-bottom: 14px;
 }
+.nap-journey {
+  margin-bottom: 16px;
+  padding: 15px 17px;
+  border-color: #3b5249;
+  background: linear-gradient(115deg, #1b2c24, #152026 72%);
+}
+.nap-journey-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.nap-journey-heading h2 {
+  margin: 0 0 3px;
+  font-size: 16px;
+  color: #e5f4de;
+}
+.nap-journey-heading p,
+.nap-journey-steps p {
+  margin: 0;
+  color: #a6bcb3;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.nap-journey-steps,
+.delivery-progress,
+.vehicle-proof ul {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+.nap-journey-steps {
+  margin-top: 11px;
+}
+.nap-journey-steps li,
+.delivery-progress li,
+.vehicle-proof li {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #3b4f4a;
+  border-radius: 6px;
+  background: #152321;
+}
+.nap-journey-steps li > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #b1cda6;
+  font-family: var(--mono);
+}
+.nap-journey-steps strong,
+.delivery-progress strong,
+.vehicle-proof strong {
+  display: block;
+  margin: 3px 0;
+  color: #e2eee3;
+  font-size: 12px;
+}
+.delivery-progress span,
+.vehicle-proof li > span {
+  color: #a9b9b2;
+  font-size: 11px;
+}
+.delivery-progress .done,
+.vehicle-proof .done {
+  border-color: #779b69;
+  background: #233629;
+}
+.vehicle-proof h2 {
+  margin: 4px 0 6px;
+  font-size: 13px;
+}
+.vehicle-proof ul {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 700px) {
+  .nap-journey-steps {
+    grid-template-columns: 1fr;
+  }
+  .nap-journey-steps li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 7px;
+  }
+  .nap-journey-steps p {
+    grid-column: 2;
+  }
+}
 .vehicle-scenes {
   max-width: 760px;
 }

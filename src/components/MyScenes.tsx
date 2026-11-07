@@ -29,12 +29,21 @@ function initialVehicle(scene: Scenario) {
   return { ...previewVehicle(scene), driverRecline: 8, playing: true, track: '轻音乐' };
 }
 
+const launchLabels = { touch: '车机点选', voice: '模拟语音' } as const;
+
+function durationLabel(seconds: number) {
+  return seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`;
+}
+
 export default function MyScenes({ visible }: { visible: boolean }) {
   const [pack, setPack] = useState<ScenePackage | null>(null);
   const [loading, setLoading] = useState(true);
   const [voice, setVoice] = useState('');
   const [source, setSource] = useState<'touch' | 'voice'>('touch');
   const [run, setRun] = useState<RunSnapshot | null>(null);
+  const [verified, setVerified] = useState<
+    Partial<Record<'touch' | 'voice', { version: number; seconds: number }>>
+  >({});
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState('');
   const runtime = useRef<CabinRuntime | null>(null);
@@ -42,6 +51,15 @@ export default function MyScenes({ visible }: { visible: boolean }) {
   const active = Boolean(run && !isTerminal(run.status));
   const alert = run?.events.find((event) => event.kind === 'reminder');
   const vehicle = run?.vehicle ?? (pack ? initialVehicle(pack.scenario) : undefined);
+  const effectiveReminder = run?.scenario.reminder;
+
+  useEffect(() => {
+    if (!run || effectiveReminder?.kind !== 'wake' || !napRestored(run)) return;
+    setVerified((previous) => ({
+      ...previous,
+      [source]: { version: run.scenario.version, seconds: effectiveReminder.afterSeconds },
+    }));
+  }, [run, effectiveReminder, source]);
 
   useEffect(() => {
     if (!visible) return;
@@ -162,6 +180,23 @@ export default function MyScenes({ visible }: { visible: boolean }) {
                 </button>
               </div>
             </form>
+            <div className="vehicle-proof" aria-label="车端闭环验收">
+              <h2>车端闭环验收 · v{pack.version}</h2>
+              <ul>
+                {(['touch', 'voice'] as const).map((mode) => {
+                  const result = verified[mode];
+                  const passed = result?.version === pack.version;
+                  return (
+                    <li key={mode} className={passed ? 'done' : ''}>
+                      <strong>{launchLabels[mode]}</strong>
+                      <span>
+                        {passed ? `${durationLabel(result.seconds)} · 已唤醒并恢复` : '尚未验证'}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           </>
         )}
         {error && (
@@ -174,6 +209,8 @@ export default function MyScenes({ visible }: { visible: boolean }) {
             <p role="status" className="vehicle-run-status">
               {source === 'voice' ? '语音启动' : '点选启动'} · v{run.scenario.version} ·{' '}
               {runStatusLabels[run.status]}
+              {effectiveReminder?.kind === 'wake' &&
+                ` · 本次 ${durationLabel(effectiveReminder.afterSeconds)}`}
             </p>
             {run.reminderDueAt !== undefined && (
               <p role="status">距离唤醒还有 {run.reminderDueAt - run.time} 个虚拟秒</p>

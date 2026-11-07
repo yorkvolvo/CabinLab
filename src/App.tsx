@@ -23,6 +23,7 @@ import {
   Moon,
   MapPin,
   Pause,
+  PackageCheck,
   Play,
   Plus,
   Radio,
@@ -129,6 +130,19 @@ const eventLabels = {
   completed: '结果',
 };
 const featuredTemplates = ['nap', 'charging', 'rainLink', 'homeReminder'] as const;
+const napJourney = [
+  { icon: WandSparkles, title: '创建并预演', detail: '选模板、用自然语言改参数，确认后验证动作。' },
+  {
+    icon: PackageCheck,
+    title: '发布并下发',
+    detail: '将通过预演的版本发布为场景包，再安装到模拟车端。',
+  },
+  {
+    icon: CarFront,
+    title: '车端启动并回读',
+    detail: '点选或语音启动同一版本，查看唤醒和设置恢复。',
+  },
+];
 
 export default function App() {
   const [versions, setVersions] = useState(readVersions);
@@ -369,6 +383,13 @@ export default function App() {
     const wasExample = createTemplate && prompt === templates[createTemplate].sourcePrompt;
     setCreateTemplate(next);
     updatePrompt(next ? templates[next].sourcePrompt : wasExample ? '' : prompt);
+  }
+  function openNapDemo() {
+    if (selected.templateId !== 'nap')
+      selectScenario(versions.filter((item) => item.templateId === 'nap').at(-1) ?? templates.nap);
+    setCompileIntent('create');
+    chooseTemplate('nap');
+    requestAnimationFrame(() => templatePicker.current?.focus());
   }
   function newRequest() {
     draftRevision.current++;
@@ -698,7 +719,7 @@ export default function App() {
                       ? '让每一次执行，都有证据。'
                       : tab === 'vehicle'
                         ? '我的场景'
-                        : '把想法，变成可验证的场景。'}
+                        : '从一句需求，到车端可用的场景。'}
               </h1>
               <p>
                 {tab === 'evidence'
@@ -709,7 +730,7 @@ export default function App() {
                       ? '使用独立产品基线，验证正常路径、边界条件和异常行为。'
                       : tab === 'vehicle'
                         ? '模拟车端。点选已安装的场景，或输入模拟语音指令启动。'
-                        : '用自然语言编排，在虚拟座舱预演，带着证据启程。'}
+                        : '在工作室验证场景，按版本下发到模拟车端，用执行回读核对结果。'}
               </p>
             </div>
             {tab !== 'vehicle' && (
@@ -732,6 +753,35 @@ export default function App() {
               </button>
             )}
           </div>
+
+          {tab === 'workbench' && (
+            <section className="panel nap-journey" aria-label="端到端演示">
+              <div className="nap-journey-heading">
+                <div>
+                  <h2>端到端演示 · 定时午休</h2>
+                  <p>从工作室改参数，到车端唤醒并恢复设置。</p>
+                </div>
+                <button
+                  className="button primary"
+                  onClick={openNapDemo}
+                  disabled={Boolean(draft || active || compiling || saving)}
+                >
+                  演示定时午休 <ArrowRight size={15} />
+                </button>
+              </div>
+              <ol className="nap-journey-steps">
+                {napJourney.map(({ icon: Icon, title, detail }, index) => (
+                  <li key={title}>
+                    <span>
+                      <Icon size={15} /> <small>0{index + 1}</small>
+                    </span>
+                    <strong>{title}</strong>
+                    <p>{detail}</p>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
 
           <div hidden={tab !== 'vehicle'}>
             <MyScenes visible={tab === 'vehicle'} />

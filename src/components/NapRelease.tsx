@@ -28,6 +28,7 @@ export default function NapRelease({
   const confirmed = JSON.stringify(validateScenario(scenario).scenario);
   const matching = pack && JSON.stringify(pack.scenario) === confirmed;
   const ready = Boolean(run && JSON.stringify(run.scenario) === confirmed && napRestored(run));
+  const installed = matching && status?.installedVersion === scenario.version;
   const endpoint = '/api/scene-packages';
 
   useEffect(() => {
@@ -87,6 +88,20 @@ export default function NapRelease({
         <span className="pill">v{scenario.version}</span>
       </div>
       <div className="scene-delivery-content">
+        <ol className="delivery-progress" aria-label="当前版本交付进度">
+          <li className={ready || matching ? 'done' : ''}>
+            <span>预演</span>
+            <strong>{ready || matching ? '已验证' : '待验证'}</strong>
+          </li>
+          <li className={matching ? 'done' : ''}>
+            <span>发布</span>
+            <strong>{matching ? `已发布 v${scenario.version}` : '待发布'}</strong>
+          </li>
+          <li className={installed ? 'done' : ''}>
+            <span>车端安装</span>
+            <strong>{installed ? `已安装 v${scenario.version}` : '待下发'}</strong>
+          </li>
+        </ol>
         <p className="muted">
           {matching
             ? `已发布 v${scenario.version}。模拟车端${status?.installedVersion ? `已安装 v${status.installedVersion}` : '尚未安装'}。`

@@ -813,18 +813,28 @@ with sync_playwright() as p:
     car.goto(BASE_URL)
     car.get_by_role("button", name="我的场景", exact=True).click()
     expect(car.get_by_text("车端尚未收到场景包。", exact=False)).to_be_visible()
-    studio.locator(".scenario-nav").filter(has_text="定时午休").click()
+    journey = studio.get_by_role("region", name="端到端演示")
+    expect(journey.get_by_text("创建并预演", exact=True)).to_be_visible()
+    expect(journey.get_by_text("发布并下发", exact=True)).to_be_visible()
+    expect(journey.get_by_text("车端启动并回读", exact=True)).to_be_visible()
+    journey.get_by_role("button", name="演示定时午休", exact=True).click()
+    expect(studio.get_by_role("combobox", name="选择场景模板")).to_have_value("nap")
     studio.get_by_role("spinbutton", name="唤醒时间").fill("600")
     studio.get_by_role("button", name="确认参数并保存版本", exact=True).click()
     expect(studio.get_by_label("场景版本", exact=True)).to_have_value("2")
     publish = studio.get_by_role("button", name="发布场景包", exact=True)
+    progress = studio.get_by_role("list", name="当前版本交付进度")
+    expect(progress.get_by_text("待验证", exact=True)).to_be_visible()
     expect(publish).to_be_disabled()
     for _ in range(6):
         studio.get_by_role("button", name="单步前进一秒", exact=True).click()
     expect(publish).to_be_disabled()
     studio.get_by_role("button", name="快进到唤醒", exact=True).click()
+    expect(progress.get_by_text("已验证", exact=True)).to_be_visible()
     publish.click()
     expect(studio.get_by_text("已发布定时午休 v2", exact=True)).to_be_visible()
+    expect(progress.get_by_text("已发布 v2", exact=True)).to_be_visible()
+    expect(progress.get_by_text("待下发", exact=True)).to_be_visible()
     with studio.expect_download() as downloaded:
         studio.get_by_role("button", name="导出场景包", exact=True).click()
     pack_path = ARTIFACTS / "nap-scene-package.json"
@@ -835,6 +845,7 @@ with sync_playwright() as p:
     expect(car.get_by_text("车端尚未收到场景包。", exact=False)).to_be_visible()
     studio.get_by_role("button", name="下发到模拟车端", exact=True).click()
     expect(studio.get_by_text("v2 已下发到模拟车端", exact=True)).to_be_visible()
+    expect(progress.get_by_text("已安装 v2", exact=True)).to_be_visible()
     car.get_by_role("button", name="刷新车端场景", exact=True).click()
     expect(car.get_by_text("已安装 v2", exact=True)).to_be_visible()
     assert car.evaluate("document.documentElement.scrollWidth <= innerWidth")
@@ -860,12 +871,17 @@ with sync_playwright() as p:
         assert result["scenario"]["version"] == 2 and result["vehicle"] == result["initialState"]
         assert result["scenario"]["reminder"]["afterSeconds"] == expected_seconds
         assert next(e["time"] for e in result["events"] if e["kind"] == "reminder") == 6 + expected_seconds
+    proof = car.locator(".vehicle-proof")
+    expect(proof.get_by_text("车端闭环验收 · v2", exact=True)).to_be_visible()
+    expect(proof.get_by_text("10 分钟 · 已唤醒并恢复", exact=True)).to_be_visible()
+    expect(proof.get_by_text("15 分钟 · 已唤醒并恢复", exact=True)).to_be_visible()
+    car.screenshot(path=str(ARTIFACTS / "nap-end-to-end-vehicle.png"), full_page=True)
     car.reload()
     car.get_by_role("button", name="我的场景", exact=True).click()
     expect(car.get_by_text("已安装 v2", exact=True)).to_be_visible()
     studio_context.close()
     car_context.close()
-    passed("午休版本发布与下发分离，车端点选和模拟语音均唤醒并恢复设置")
+    passed("首页进入午休端到端演示，逐步查看交付进度和同版双入口验收")
 
     assert not errors, errors
     passed("浏览器无未捕获 JavaScript 异常")
