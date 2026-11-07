@@ -1,4 +1,4 @@
-"""对运行中的 CabinLab 做浏览器验收；产物保存在 artifacts/。"""
+"""对运行中的场景工作室 做浏览器验收；产物保存在 artifacts/。"""
 
 import json
 import os
@@ -21,7 +21,7 @@ for attempt in range(60):
     except OSError:
         time.sleep(0.5)
 else:
-    raise RuntimeError(f"CabinLab 未启动：{BASE_URL}")
+    raise RuntimeError(f"场景工作室未启动：{BASE_URL}")
 
 checks = []
 

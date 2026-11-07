@@ -19,9 +19,9 @@ if (process.argv.includes('--production')) {
 }
 
 const server = app.listen(port, host, () =>
-  console.log(`CabinLab → http://${host}:${port} (${process.env.LLM_PROVIDER || 'demo'})`),
+  console.log(`场景工作室 → http://${host}:${port} (${process.env.LLM_PROVIDER || 'demo'})`),
 );
 server.on('error', (e) => {
-  console.error(`CabinLab 启动失败：${e.message}`);
+  console.error(`场景工作室启动失败：${e.message}`);
   process.exit(1);
 });

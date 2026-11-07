@@ -1,4 +1,4 @@
-# CabinLab · 场景工作室
+# 场景工作室
 
 **从一句需求，到车端可用的场景。** 在工作室编排并预演，发布带版本的场景包，再到模拟车端点选或语音启动并核对回读。
 
@@ -8,7 +8,7 @@
 
 > 当前为独立通用原型。所有车辆信号、能力和执行反馈都是模拟数据，不连接真实车辆，不使用雇主代码、内部接口或真实用户日志。
 
-![CabinLab 工作台](docs/images/workbench.png)
+![场景工作室工作台](docs/images/workbench.png)
 
 ## 立即运行
 
@@ -30,7 +30,7 @@ npm start
 
 修改端口：`PORT=5174 npm run dev`。首次启动没有 `.env` 的提示是正常现象。
 
-## 三分钟实验
+## 三分钟上手
 
 1. 选择「午间休憩」。默认显示的是**已确认的示例**：P 挡、车速 0、温度高于 28°C 持续 10 秒。
 2. 在「创建场景」的「从模板开始」中选模板，带入示例需求。也可用自由创建。点击「生成场景」后核对**候选草案**，再确认并保存版本。
@@ -117,7 +117,7 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5-mini
 ```
 
-保存后重启服务。此模式使用 OpenAI 官方地址和独立密钥，工作台会显示「OpenAI 直连」。请求使用 JSON 对象模式，生成内容仍需通过 CabinLab 的场景校验。[Chat Completions 响应格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+保存后重启服务。此模式使用 OpenAI 官方地址和独立密钥，工作台会显示「OpenAI 直连」。请求使用 JSON 对象模式，生成内容仍需通过 场景工作室的场景校验。[Chat Completions 响应格式](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 
 使用 Chat Completions 兼容网关时，在 `.env` 填写以下配置并重启服务：
 

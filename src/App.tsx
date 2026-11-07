@@ -16,7 +16,6 @@ import {
   Code2,
   Download,
   FileCheck2,
-  FlaskConical,
   Layers3,
   Leaf,
   LoaderCircle,
@@ -561,15 +560,15 @@ export default function App() {
           }}
         >
           <span className="brand-mark">
-            <FlaskConical size={22} strokeWidth={1.8} />
+            <Layers3 size={22} strokeWidth={1.8} />
           </span>
           <span>
-            Cabin<span className="brand-light">Lab</span>
-            <small>场景工作室</small>
+            场景工作室
+            <small>SCENARIO STUDIO</small>
           </span>
         </a>
         <div className="workspace-label">
-          <span className="workspace-dot" /> 个人实验空间 <span className="mono">01</span>
+          <span className="workspace-dot" /> 个人工作空间 <span className="mono">01</span>
         </div>
         <p className="nav-label">WORKSPACE</p>
         <button
@@ -661,7 +660,7 @@ export default function App() {
           <div className="local-note">
             <span className="live-dot" />
             <span>
-              本地实验，放心探索<small>所有设备动作均在虚拟座舱内</small>
+              本地仿真<small>所有设备动作均在虚拟座舱内</small>
             </span>
           </div>
           <button className="help-button" onClick={() => setHelpOpen(true)}>
@@ -669,7 +668,7 @@ export default function App() {
             快速上手
             <ArrowUpRight size={14} />
           </button>
-          <span className="sidebar-version mono">CABINLAB / v{packageInfo.version}</span>
+          <span className="sidebar-version mono">场景工作室 / v{packageInfo.version}</span>
         </div>
       </aside>
 
@@ -701,7 +700,7 @@ export default function App() {
                     ? '本地模板模式'
                     : '服务连接中 / 离线'}
             </span>
-            <div className="avatar">CL</div>
+            <div className="avatar">SS</div>
           </div>
         </header>
         <main>
@@ -712,7 +711,7 @@ export default function App() {
               </div>
               <h1>
                 {tab === 'evidence'
-                  ? '导入证据，复现实验。'
+                  ? '导入证据，复核场景运行。'
                   : tab === 'catalog'
                     ? '能力有边界，执行有依据。'
                     : tab === 'verification'
@@ -1811,7 +1810,8 @@ export default function App() {
                         <div className="timeline-empty">
                           <span className="terminal-caret">_</span>
                           <p>
-                            你的下一次实验，从这里开始。<span>请求、回读与异常将逐条留痕</span>
+                            开始预演后，运行事件会显示在这里。
+                            <span>请求、回读与异常将逐条留痕</span>
                           </p>
                         </div>
                       )}
@@ -1864,7 +1864,7 @@ export default function App() {
             }}
           >
             <div className="panel-heading">
-              <span>{jsonOpen ? '声明式场景 / DSL' : '欢迎来到 CabinLab'}</span>
+              <span>{jsonOpen ? '声明式场景 / DSL' : '欢迎来到场景工作室'}</span>
               <button
                 className="icon-button"
                 autoFocus
@@ -1890,11 +1890,11 @@ export default function App() {
               </>
             ) : (
               <div className="help-content">
-                <span className="eyebrow">THREE MINUTES, ONE EXPERIMENT</span>
+                <span className="eyebrow">三分钟上手</span>
                 <h2>
-                  从一句想法，
+                  从一句需求，
                   <br />
-                  走到一份执行证据。
+                  到车端可用的场景。
                 </h2>
                 <ol>
                   <li>

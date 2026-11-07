@@ -308,14 +308,10 @@ details summary::-webkit-details-marker {
   height: 38px;
   border-radius: 11px;
 }
-.brand-light {
-  font-weight: 400;
-  color: #d9e4d5;
-}
 .brand small {
   display: block;
   color: #859196;
-  letter-spacing: 3.5px;
+  letter-spacing: 1.5px;
   font-size: 9px;
   line-height: 1;
   margin-top: 8px;
@@ -2512,9 +2508,6 @@ main {
     width: 32px;
     height: 35px;
   }
-  .brand small {
-    letter-spacing: 3px;
-  }
   .local-note {
     font-size: 9px;
   }
@@ -2683,11 +2676,10 @@ main {
   }
   .brand > span:last-child {
     display: block;
-    font-size: 23px;
+    font-size: 18px;
   }
   .brand small {
     font-size: 8px;
-    letter-spacing: 3px;
   }
   .brand-mark {
     width: 32px;
