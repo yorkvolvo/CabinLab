@@ -9,6 +9,7 @@ export const actionSchema = z.discriminatedUnion('capability', [
     .object({ capability: z.literal('climate.fan'), value: z.number().int().min(1).max(5) })
     .strict(),
   z.object({ capability: z.literal('climate.recirculation'), value: z.boolean() }).strict(),
+  z.object({ capability: z.literal('climate.frontDefrost'), value: z.boolean() }).strict(),
   z
     .object({ capability: z.literal('media.play'), value: z.enum(['轻音乐', '自然白噪音']) })
     .strict(),
@@ -44,6 +45,8 @@ export const scenarioSchema = z
       'night',
       'nap',
       'charging',
+      'rainDefog',
+      'pickup',
     ]),
     name: z.string().min(1).max(40),
     description: z.string().min(1).max(200),
@@ -52,7 +55,14 @@ export const scenarioSchema = z
     confirmed: z.boolean(),
     trigger: z
       .object({
-        signal: z.enum(['temperature', 'illuminance', 'co2', 'batteryPercent']),
+        signal: z.enum([
+          'temperature',
+          'illuminance',
+          'co2',
+          'batteryPercent',
+          'rainLevel',
+          'pickupDistance',
+        ]),
         operator: z.enum(['gt', 'lt']),
         threshold: z.number().min(-50).max(10000),
         holdSeconds: z
@@ -129,6 +139,14 @@ export const catalog: Record<
     result: '循环模式回读',
     boundary: '布尔值仅表示模拟内外循环；真实模式枚举需显式转换。',
   },
+  'climate.frontDefrost': {
+    label: '前挡除雾',
+    unit: '',
+    range: '开 / 关',
+    precondition: '停车且空调已开启',
+    result: '前挡除雾开关回读',
+    boundary: '回读表示模拟模式已开启，玻璃起雾和清除效果不在台架模型内。',
+  },
   'media.play': {
     label: '播放音乐',
     unit: '',
@@ -176,6 +194,8 @@ export const signalLabels = {
   illuminance: { label: '环境照度', unit: 'lx', min: 0, max: 300 },
   co2: { label: 'CO₂ 浓度', unit: 'ppm', min: 400, max: 2000 },
   batteryPercent: { label: '电池电量', unit: '%', min: 0, max: 100 },
+  rainLevel: { label: '模拟雨量等级', unit: '级', min: 0, max: 3 },
+  pickupDistance: { label: '距接娃点（模拟）', unit: 'm', min: 0, max: 500 },
 };
 
 export const seatLabels = { driver: '主驾', passenger: '副驾' };
@@ -205,6 +225,10 @@ export function resourceOf(capability: Capability): Resource {
   return capability.split('.')[0] as Resource;
 }
 
+export function needsClimatePower(capability: Capability): boolean {
+  return capability.startsWith('climate.') && capability !== 'climate.power';
+}
+
 export function validateScenario(value: unknown): { scenario?: Scenario; errors: string[] } {
   const parsed = scenarioSchema.safeParse(value);
   if (!parsed.success)
@@ -217,22 +241,25 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
     if (seen.has(action.capability)) errors.push(`重复能力：${action.capability}`);
     seen.add(action.capability);
     if (action.capability === 'climate.power') power = action.value;
-    if (
-      ['climate.temperature', 'climate.fan', 'climate.recirculation'].includes(action.capability) &&
-      !power
-    ) {
+    if (needsClimatePower(action.capability) && !power) {
       errors.push(`${action.capability} 前必须明确开启空调`);
     }
   }
   if (seen.has('media.play') && seen.has('media.pause'))
     errors.push('同一场景不能同时播放与暂停媒体');
-  const { signal, threshold } = scenario.trigger;
+  const { signal, operator, threshold } = scenario.trigger;
   if (scenario.templateId === 'nap' && scenario.reminder?.kind !== 'wake')
     errors.push('定时午休必须设置唤醒计时');
   if (scenario.templateId === 'charging' && scenario.reminder?.kind !== 'charge')
     errors.push('充电等候必须设置目标电量提醒');
   if (scenario.reminder?.kind === 'charge' && signal !== 'batteryPercent')
     errors.push('充电提醒的触发信号必须为电池电量');
+  if (scenario.templateId === 'rainDefog' && (signal !== 'rainLevel' || operator !== 'gt'))
+    errors.push('雨天除雾的触发条件必须为模拟雨量等级高于阈值');
+  if (scenario.templateId === 'pickup' && (signal !== 'pickupDistance' || operator !== 'lt'))
+    errors.push('接娃等候的触发条件必须为模拟距离低于阈值');
+  if (signal === 'rainLevel' && !Number.isInteger(threshold))
+    errors.push('模拟雨量等级阈值必须是整数');
   const bounds = signalLabels[signal];
   if (threshold < bounds.min || threshold > bounds.max)
     errors.push(`${bounds.label}阈值超出模拟范围`);

@@ -142,6 +142,11 @@ export async function compile(
         )}。不擅自添加退出恢复操作。无法完整满足需求或需要澄清时，只返回 {"clarification":"说明缺少的信息或未支持的能力"}，不可忽略未支持部分后生成草案。触发阈值必须位于对应信号的 min–max 范围，不能把 Schema 的通用数值边界当成某个信号的范围。信号范围：${JSON.stringify(signalLabels)}。能力目录：${JSON.stringify(catalog)}。场景 Schema：${JSON.stringify(z.toJSONSchema(scenarioSchema))}`;
   system +=
     '\n定时午休用 templateId=nap、reminder={"kind":"wake","afterSeconds":秒数}，从准备完成起计时；分钟要换算为秒。充电等候用 templateId=charging、trigger.signal=batteryPercent、reminder={"kind":"charge","atPercent":目标百分比}，只在插枪时进入流程，达到或超过目标即提醒。提醒参数与触发持续时间、动作超时不同。座椅后仰用 {"capability":"seat.recline","seat":"driver 或 passenger","value":角度}，对应座位占用由执行器检查，不生成额外条件或动作。';
+  system +=
+    '\n雨天除雾用 templateId=rainDefog，模拟雨量等级用 rainLevel（0–3 整数），高于阈值用 gt，前挡除雾开关用 climate.frontDefrost（布尔值，前置动作 climate.power=true）。接娃等候用 templateId=pickup，距接娃点的模拟距离用 pickupDistance（米），小于阈值用 lt；暂停媒体用 media.pause=true。按明确顺序执行动作；这两个场景的既定退出策略是停止后续动作、保留已完成状态。';
+  if (baseScenario)
+    system +=
+      '\n每个动作都使用独立的 capability 和 value 键，例如 {"capability":"climate.fan","value":4}。';
   if (repairAttempt)
     system +=
       '\n上次输出未通过 JSON 或参数校验。请按同一用户需求重新输出合法 JSON，不写代码、表达式或 Markdown；保留全部未修改动作，不扩大修改范围。';

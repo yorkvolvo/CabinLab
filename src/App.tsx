@@ -10,6 +10,7 @@ import {
   Check,
   ChevronRight,
   CircleHelp,
+  CloudRain,
   Code2,
   Download,
   FileCheck2,
@@ -18,6 +19,7 @@ import {
   Leaf,
   LoaderCircle,
   Moon,
+  MapPin,
   Pause,
   Play,
   Plus,
@@ -73,6 +75,8 @@ const icons = {
   night: Moon,
   nap: AlarmClock,
   charging: BatteryCharging,
+  rainDefog: CloudRain,
+  pickup: MapPin,
 };
 const eventLabels = {
   armed: '就绪',
@@ -1158,10 +1162,10 @@ export default function App() {
                           min={currentSignal.min}
                           max={currentSignal.max}
                           step={
-                            scenario.trigger.signal === 'temperature' ||
-                            scenario.trigger.signal === 'batteryPercent'
-                              ? 1
-                              : 10
+                            scenario.trigger.signal === 'illuminance' ||
+                            scenario.trigger.signal === 'co2'
+                              ? 10
+                              : 1
                           }
                           value={vehicle[scenario.trigger.signal] ?? currentSignal.min}
                           onChange={(e) =>
@@ -1183,6 +1187,11 @@ export default function App() {
                           </span>
                         </div>
                       </div>
+                      {vehicle.frontDefrost !== undefined && (
+                        <p className="small muted" role="status">
+                          前挡除雾回读：{vehicle.frontDefrost ? '已开启' : '已关闭'}
+                        </p>
+                      )}
                       {hasSeatInputs && (
                         <div className="reminder-controls" aria-label="座位和充电模拟输入">
                           <label>

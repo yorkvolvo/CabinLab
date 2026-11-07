@@ -131,6 +131,36 @@ export const templates: Record<TemplateId, Scenario> = {
     ],
     reminder: { kind: 'charge', atPercent: 80 },
   },
+  rainDefog: {
+    ...base,
+    id: 'rainDefog',
+    templateId: 'rainDefog',
+    name: '雨天除雾',
+    description: '停车遇雨，开启前挡除雾和适度送风。',
+    sourcePrompt:
+      '创建「雨天除雾」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒，依次执行：开启空调电源；开启前挡除雾；风量设为 3 档。驶离或雨量条件失效时停止后续动作，不恢复旧值。',
+    trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.frontDefrost', value: true },
+      { capability: 'climate.fan', value: 3 },
+    ],
+  },
+  pickup: {
+    ...base,
+    id: 'pickup',
+    templateId: 'pickup',
+    name: '接娃等候',
+    description: '在接娃点附近停车时，准备舒适温度并暂停媒体，安静等候。',
+    sourcePrompt:
+      '创建「接娃等候」。仅 P 挡且车速为 0，距接娃点的模拟距离小于 100 m 连续 5 秒，依次执行：开启空调电源；目标温度设为 24°C；暂停媒体。驶离或距离条件失效时停止后续动作，不恢复旧值。',
+    trigger: { signal: 'pickupDistance', operator: 'lt', threshold: 100, holdSeconds: 5 },
+    actions: [
+      { capability: 'climate.power', value: true },
+      { capability: 'climate.temperature', value: 24 },
+      { capability: 'media.pause', value: true },
+    ],
+  },
 };
 
 export function cloneTemplate(id: TemplateId): Scenario {

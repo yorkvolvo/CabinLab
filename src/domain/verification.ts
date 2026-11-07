@@ -1,13 +1,6 @@
-import {
-  CabinRuntime,
-  initialVehicle,
-  previewVehicle,
-  replayEvidence,
-  type RunSnapshot,
-  type Vehicle,
-} from './runtime';
+import { CabinRuntime, previewVehicle, replayEvidence, type RunSnapshot } from './runtime';
 import { cloneTemplate } from './templates';
-import { resourceOf, validateScenario, type Action, type Scenario } from './scenario';
+import { resourceOf, signalLabels, validateScenario, type Action, type Scenario } from './scenario';
 
 export interface VerificationCase {
   id: string;
@@ -41,6 +34,8 @@ const actionsMatch = (s: RunSnapshot, action: Action) => {
       return v.fan === action.value;
     case 'climate.recirculation':
       return v.recirculation === action.value;
+    case 'climate.frontDefrost':
+      return v.frontDefrost === action.value;
     case 'media.play':
       return v.playing && v.track === action.value;
     case 'media.pause':
@@ -59,11 +54,16 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
   const baseline = cloneTemplate(scenario.templateId);
   const hold = baseline.trigger.holdSeconds;
   const signal = baseline.trigger.signal;
-  const inactive = baseline.trigger.threshold + (baseline.trigger.operator === 'gt' ? -2 : 2);
-  const active = baseline.trigger.threshold + (baseline.trigger.operator === 'gt' ? 2 : -2);
-  const initial: Vehicle = baseline.reminder
-    ? previewVehicle(baseline)
-    : { ...initialVehicle, [signal]: active };
+  const bounds = signalLabels[signal];
+  const inactive = Math.max(
+    bounds.min,
+    Math.min(
+      bounds.max,
+      baseline.trigger.threshold + (baseline.trigger.operator === 'gt' ? -2 : 2),
+    ),
+  );
+  const initial = previewVehicle(baseline);
+  const active = initial[signal]!;
   const cases: VerificationCase[] = [];
   let latest: CabinRuntime | undefined;
   const create = (v = initial) => {

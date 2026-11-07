@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.2.0"
+    assert unknown["runtimeVersion"] == "1.3.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -272,6 +272,39 @@ with sync_playwright() as p:
     expect(page.get_by_role("alert")).to_have_count(0)
     passed("充电等候守卫、空座不动、目标电量提醒和拔枪取消")
 
+    select_template("雨天除雾")
+    slider = page.get_by_role("slider", name="模拟传感器数值")
+    slider.fill("1")
+    steps(6)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    slider.fill("2")
+    steps(6)
+    expect(page.get_by_text("前挡除雾回读：已关闭", exact=True)).to_be_visible()
+    steps(2)
+    expect(page.get_by_text("前挡除雾回读：已开启", exact=True)).to_be_visible()
+    rain = export_run("run-rain-defog.json")
+    assert rain["status"] == "completed" and rain["vehicle"]["fan"] == 3
+    assert rain["vehicle"]["frontDefrost"] is True
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    expect(page.get_by_text("前挡除雾回读：已开启", exact=True)).to_be_visible()
+    passed("雨量等级阈值、前挡除雾回读和证据重放")
+
+    select_template("接娃等候")
+    slider.fill("100")
+    steps(6)
+    expect(page.locator(".run-status")).to_contain_text("等待触发")
+    slider.fill("99")
+    steps(5)
+    slider.fill("101")
+    expect(page.locator(".run-status")).to_contain_text("条件退出")
+    assert export_run("run-pickup-stopped.json")["vehicle"]["playing"] is True
+    select_template("接娃等候")
+    steps(8)
+    pickup = export_run("run-pickup.json")
+    assert pickup["status"] == "completed"
+    assert pickup["vehicle"]["targetTemperature"] == 24 and not pickup["vehicle"]["playing"]
+    passed("接娃点距离边界、离开范围取消及空调与媒体回读")
+
     migration_context = browser.new_context()
     old_versions = [
         {**successful["scenario"], "version": 7, "name": "我保存的午休"},
@@ -281,7 +314,7 @@ with sync_playwright() as p:
     migration_page = migration_context.new_page()
     migration_page.goto(BASE_URL)
     expect(migration_page.get_by_label("场景版本", exact=True)).to_have_value("7")
-    assert migration_page.locator(".scenario-nav").count() == 8
+    assert migration_page.locator(".scenario-nav").count() == 10
     expect(migration_page.locator(".workspace-toolbar")).to_contain_text("我保存的午休")
     migration_context.close()
     passed("旧三场景缓存保留自定义版本，自动补齐新增模板")
@@ -321,11 +354,11 @@ with sync_playwright() as p:
     page.keyboard.press("Escape")
     expect(page.get_by_role("dialog")).to_have_count(0)
     page.get_by_role("button", name=re.compile("能力目录")).click()
-    assert page.locator(".capability-card").count() == 9
+    assert page.locator(".capability-card").count() == 10
     expect(page.get_by_text(re.compile("不能直接透传百分比"))).to_be_visible()
     expect(page.get_by_text(re.compile("阅读灯开关不能等同于亮度调节"))).to_be_visible()
     page.get_by_role("button", name="场景工作台", exact=True).click()
-    passed("版本本地持久化、DSL 弹窗键盘关闭、9 项能力目录")
+    passed("版本本地持久化、DSL 弹窗键盘关闭、10 项能力目录")
 
     for prompt in ["停车休息时不要开空调", "取消停车休息场景", "停车休息持续二十秒后开空调"]:
         page.get_by_label("自然语言需求", exact=True).fill(prompt)
@@ -482,7 +515,7 @@ with sync_playwright() as p:
     page.set_viewport_size({"width": 390, "height": 844})
     page.wait_for_timeout(200)
     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
-    assert page.locator(".scenario-nav").count() == 8
+    assert page.locator(".scenario-nav").count() == 10
     nav_tops = page.locator(".nav-item").evaluate_all("items => items.map(item => item.getBoundingClientRect().top)")
     assert len(set(nav_tops)) == 1, nav_tops
     page.screenshot(path=str(ARTIFACTS / "workbench-mobile.png"), full_page=True)

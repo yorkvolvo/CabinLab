@@ -60,16 +60,19 @@ batch: for (const model of models) {
         if (intent === 'modify') {
           if (expected.reminder?.kind === 'wake') expected.reminder.afterSeconds += 60;
           else if (expected.reminder?.kind === 'charge') expected.reminder.atPercent += 5;
+          else if (expected.templateId === 'pickup') expected.trigger.threshold += 20;
           else expected.trigger.holdSeconds += 2;
           expected.actions.find((action) => action.capability === numeric.capability)!.value =
             changed;
         }
         const prompt =
           intent === 'create'
-            ? baseline.reminder
+            ? baseline.reminder ||
+              baseline.templateId === 'rainDefog' ||
+              baseline.templateId === 'pickup'
               ? baseline.sourcePrompt
               : `创建“${baseline.name}”。仅 P 挡且车速为 0，${signalLabels[baseline.trigger.signal].label}${baseline.trigger.operator === 'gt' ? '高于' : '低于'} ${baseline.trigger.threshold}${signalLabels[baseline.trigger.signal].unit}连续 ${baseline.trigger.holdSeconds} 秒，依次执行：${baseline.actions.map(actionLabel).join('；')}。开始行驶或触发条件失效时停止后续动作，不恢复旧值。`
-            : `只修改这两项：${expected.reminder ? reminderLabel(expected.reminder) : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}。其余字段、动作及顺序全部原样保留，不增删动作。`;
+            : `只修改这两项：${expected.reminder ? reminderLabel(expected.reminder) : expected.templateId === 'pickup' ? `触发阈值改为 ${expected.trigger.threshold} 米` : `持续时间改为 ${expected.trigger.holdSeconds} 秒`}；${catalog[numeric.capability].label}改为 ${changed}${catalog[numeric.capability].unit}。其余字段、动作及顺序全部原样保留，不增删动作。`;
         const started = performance.now();
         let passed = false;
         let error: string | undefined;
@@ -77,7 +80,14 @@ batch: for (const model of models) {
         let headersMs: number | undefined;
         let status: number | undefined;
         let requests = 0;
-        let preview: { status: string; reminderTime: number; seatGuard: boolean } | undefined;
+        let preview:
+          | {
+              status: string;
+              reminderTime?: number;
+              seatGuard?: boolean;
+              confirmedActions?: number;
+            }
+          | undefined;
         let captured: Promise<string> | undefined;
         let contentType = '';
         try {
@@ -121,7 +131,7 @@ batch: for (const model of models) {
               expected,
             );
           }
-          if (expected.reminder) preview = verifyPreview(result.draft, expected);
+          preview = verifyPreview(result.draft, expected);
           passed = true;
         } catch (failure) {
           error =
@@ -203,11 +213,43 @@ if (records.some((row) => !row.passed)) process.exitCode = 1;
 function verifyPreview(draft: Scenario, expected: Scenario) {
   const scene = { ...draft, confirmed: true };
   const initial = previewVehicle(expected);
-  const reminder = expected.reminder!;
+  const reminder = expected.reminder;
   const readyAt = expected.trigger.holdSeconds + expected.actions.length;
+  const runtime = new CabinRuntime(scene, initial);
+  if (!reminder) {
+    const { signal, threshold, holdSeconds } = expected.trigger;
+    const boundary = new CabinRuntime(scene, { ...initial, [signal]: threshold });
+    assert.equal(boundary.step(holdSeconds + 1).status, 'armed');
+    const complete = runtime.advanceTo(readyAt);
+    assert.equal(complete.status, 'completed');
+    assert.deepEqual(
+      complete.events
+        .filter((event) => event.kind === 'confirmed')
+        .map(({ time, capability }) => ({ time, capability })),
+      expected.actions.map(({ capability }, index) => ({
+        time: holdSeconds + index + 1,
+        capability,
+      })),
+    );
+    if (expected.templateId === 'rainDefog') {
+      assert.equal(complete.vehicle.frontDefrost, true);
+      assert.equal(
+        complete.vehicle.fan,
+        expected.actions.find((action) => action.capability === 'climate.fan')?.value,
+      );
+    }
+    if (expected.templateId === 'pickup') {
+      assert.equal(
+        complete.vehicle.targetTemperature,
+        expected.actions.find((action) => action.capability === 'climate.temperature')?.value,
+      );
+      assert.equal(complete.vehicle.playing, false);
+    }
+    assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
+    return { status: complete.status, confirmedActions: expected.actions.length };
+  }
   const seat = expected.actions.find((action) => action.capability === 'seat.recline');
   assert.ok(seat);
-  const runtime = new CabinRuntime(scene, initial);
   const ready = runtime.advanceTo(readyAt);
   assert.equal(ready.status, 'waiting');
   assert.equal(

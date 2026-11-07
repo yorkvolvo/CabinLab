@@ -94,7 +94,7 @@ export function compileDemo(prompt: string): CompileResult {
   const exact = Object.values(templates).find(
     (template) => template.sourcePrompt === prompt.trim(),
   );
-  if (exact?.reminder) return demoDraft(exact.templateId, prompt);
+  if (exact) return demoDraft(exact.templateId, prompt);
   const intent = prompt
     .replace(/(?:不(?:要)?|无需)(?:恢复|还原|复原)(?:设备(?:状态)?)?/g, '')
     .replace(/(?:我)?开始(?:开车|行驶)就(?:结束休息模式|停止这个场景|结束场景)/g, '');
@@ -125,26 +125,29 @@ export function compileDemo(prompt: string): CompileResult {
     );
   if (
     /\d/.test(prompt) ||
-    (/[零〇一二三四五六七八九十百千万两半]+\s*(?:秒|分钟|小时|度|档|摄氏度)/.test(prompt) &&
-      !Object.values(templates).some((template) => template.sourcePrompt === prompt.trim()))
+    /[零〇一二三四五六七八九十百千万两半]+\s*(?:秒|分钟|小时|度|档|级|米|摄氏度)/.test(prompt)
   )
     throw new CompileError(
       'needs_clarification',
       '本地模板创建不提取自定义数值。请先选择示例，再切到“修改当前场景”，例如“把持续时间改为 8 秒”；也可以直接编辑参数。',
     );
-  const id = /暖舱|预热|偏冷|太冷/.test(prompt)
-    ? 'warmup'
-    : /强力降温|快速降温|闷热/.test(prompt)
-      ? 'cooldown'
-      : /夜间放松|夜间休息|白噪音/.test(prompt)
-        ? 'night'
-        : /阅读|看书|灯/.test(prompt)
-          ? 'reading'
-          : /空气|二氧化碳|外循环|清新/.test(prompt)
-            ? 'refresh'
-            : /休息|休憩|降温|太热|空调|音乐/.test(prompt)
-              ? 'rest'
-              : null;
+  const id = /雨天除雾|前挡除雾|前挡除霜/.test(prompt)
+    ? 'rainDefog'
+    : /接娃|接孩子/.test(prompt)
+      ? 'pickup'
+      : /暖舱|预热|偏冷|太冷/.test(prompt)
+        ? 'warmup'
+        : /强力降温|快速降温|闷热/.test(prompt)
+          ? 'cooldown'
+          : /夜间放松|夜间休息|白噪音/.test(prompt)
+            ? 'night'
+            : /阅读|看书|灯/.test(prompt)
+              ? 'reading'
+              : /空气|二氧化碳|外循环|清新/.test(prompt)
+                ? 'refresh'
+                : /休息|休憩|降温|太热|空调|音乐/.test(prompt)
+                  ? 'rest'
+                  : null;
   if (!id)
     throw new CompileError(
       'needs_clarification',
@@ -175,9 +178,11 @@ export function modifyDemo(prompt: string, base: Scenario): CompileResult {
       key: 'threshold',
       names: '触发阈值',
       unit:
-        signalLabels[base.trigger.signal].unit === '°C'
-          ? '°C|℃|度'
-          : signalLabels[base.trigger.signal].unit,
+        base.trigger.signal === 'pickupDistance'
+          ? 'm|米'
+          : signalLabels[base.trigger.signal].unit === '°C'
+            ? '°C|℃|度'
+            : signalLabels[base.trigger.signal].unit,
     },
     { key: 'climate.temperature', names: '目标温度|空调目标温度', unit: '°C|℃|度' },
     { key: 'media.volume', names: '音量|媒体音量', unit: '%|％' },

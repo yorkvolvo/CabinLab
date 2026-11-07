@@ -60,6 +60,24 @@ for (const id of Object.keys(templates) as TemplateId[]) {
   });
 }
 
+test('前挡除雾要求空调成功开启，旧运行时不会接受新能力或信号', () => {
+  const scenario = cloneTemplate('rainDefog');
+  const initial = previewVehicle(scenario);
+  const run = new CabinRuntime(scenario, initial, 'climate.power:rejected').step(20);
+  assert.equal(run.vehicle.frontDefrost, false);
+  assert.ok(
+    run.events.some(
+      (event) => event.kind === 'blocked' && event.capability === 'climate.frontDefrost',
+    ),
+  );
+  assert.throws(() => new CabinRuntime(scenario, initial, 'none', 'old', '1.2.0'), /旧运行时/);
+  const nap = cloneTemplate('nap');
+  const old = new CabinRuntime(nap, previewVehicle(nap), 'none', 'old', '1.2.0');
+  assert.throws(() => old.setSignals({ rainLevel: 3 }), /旧运行时/);
+  const waiting = old.step(6);
+  assert.equal(inspectEvidence(JSON.stringify(waiting)).replayed.reminderDueAt, 1206);
+});
+
 test('媒体播放回读丢失后，后续音量控制也停止，已达成的空调不回滚', () => {
   const result = new CabinRuntime(
     cloneTemplate('rest'),

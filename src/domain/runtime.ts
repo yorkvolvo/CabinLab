@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   actionLabel,
   catalog,
+  needsClimatePower,
   reminderLabel,
   seatLabels,
   signalLabels,
@@ -34,6 +35,9 @@ export const vehicleSchema = z
     passengerOccupied: z.boolean().optional(),
     driverRecline: z.number().int().min(0).max(45).optional(),
     passengerRecline: z.number().int().min(0).max(45).optional(),
+    rainLevel: z.number().int().min(0).max(3).optional(),
+    pickupDistance: z.number().min(0).max(500).optional(),
+    frontDefrost: z.boolean().optional(),
   })
   .strict();
 export type Vehicle = z.infer<typeof vehicleSchema>;
@@ -48,10 +52,12 @@ export const signalsSchema = vehicleSchema
     batteryPercent: true,
     driverOccupied: true,
     passengerOccupied: true,
+    rainLevel: true,
+    pickupDistance: true,
   })
   .partial()
   .strict();
-const newVehicleKeys = [
+const reminderVehicleKeys = [
   'charging',
   'batteryPercent',
   'driverOccupied',
@@ -59,6 +65,7 @@ const newVehicleKeys = [
   'driverRecline',
   'passengerRecline',
 ] as const;
+const rainPickupVehicleKeys = ['rainLevel', 'pickupDistance', 'frontDefrost'] as const;
 export const faultSchema = z.enum([
   'none',
   ...Object.keys(catalog).flatMap((key) => {
@@ -66,7 +73,7 @@ export const faultSchema = z.enum([
     return [capability, `${capability}:rejected`, `${capability}:feedback-lost`] as const;
   }),
 ]);
-export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0']);
+export const runtimeVersionSchema = z.enum(['1.0.0', '1.1.0', '1.2.0', '1.3.0']);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
   | 'armed'
@@ -182,6 +189,12 @@ export function previewVehicle(scenario: Scenario): Vehicle {
       Math.max(0, scenario.reminder.atPercent - 10),
     );
   }
+  if (scenario.actions.some((action) => action.capability === 'climate.frontDefrost'))
+    vehicle.frontDefrost = false;
+  if (scenario.templateId === 'pickup') {
+    vehicle.playing = true;
+    vehicle.track = '轻音乐';
+  }
   return vehicle;
 }
 
@@ -212,7 +225,7 @@ export class CabinRuntime {
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.2.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.3.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -224,14 +237,23 @@ export class CabinRuntime {
     this.scenario = structuredClone(validated.scenario);
     this.vehicle = vehicleSchema.parse(structuredClone(vehicle));
     if (
-      runtimeVersion !== '1.2.0' &&
+      !this.supportsReminders &&
       (this.scenario.reminder ||
         this.scenario.trigger.signal === 'batteryPercent' ||
         this.scenario.actions.some((action) => action.capability === 'seat.recline') ||
-        newVehicleKeys.some((key) => this.vehicle[key] !== undefined) ||
+        reminderVehicleKeys.some((key) => this.vehicle[key] !== undefined) ||
         fault.startsWith('seat.'))
     )
       throw new Error('旧运行时不支持座椅、充电和定时提醒');
+    if (
+      runtimeVersion !== '1.3.0' &&
+      (this.scenario.trigger.signal === 'rainLevel' ||
+        this.scenario.trigger.signal === 'pickupDistance' ||
+        this.scenario.actions.some((action) => action.capability === 'climate.frontDefrost') ||
+        rainPickupVehicleKeys.some((key) => this.vehicle[key] !== undefined) ||
+        fault.startsWith('climate.frontDefrost'))
+    )
+      throw new Error('旧运行时不支持雨量、接娃距离和前挡除雾');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
     this.log('armed', `场景 v${scenario.version} 已就绪；只运行一次，退出时不恢复设备状态`);
@@ -247,6 +269,10 @@ export class CabinRuntime {
       ...(capability ? { capability } : {}),
       state: structuredClone(this.vehicle),
     });
+  }
+
+  private get supportsReminders(): boolean {
+    return this.runtimeVersion !== '1.0.0' && this.runtimeVersion !== '1.1.0';
   }
 
   private matches(): boolean {
@@ -328,9 +354,7 @@ export class CabinRuntime {
     while (this.cursor < this.scenario.actions.length) {
       const action = this.scenario.actions[this.cursor++];
       const resource = resourceOf(action.capability);
-      const needsPower = ['climate.temperature', 'climate.fan', 'climate.recirculation'].includes(
-        action.capability,
-      );
+      const needsPower = needsClimatePower(action.capability);
       if (!isParked(this.vehicle) || (!this.scenario.reminder && !this.matches())) {
         this.stop('动作前策略检查未通过');
         return;
@@ -432,6 +456,9 @@ export class CabinRuntime {
       case 'climate.recirculation':
         this.vehicle.recirculation = action.value;
         break;
+      case 'climate.frontDefrost':
+        this.vehicle.frontDefrost = action.value;
+        break;
       case 'media.play':
         this.vehicle.track = action.value;
         this.vehicle.playing = true;
@@ -494,7 +521,10 @@ export class CabinRuntime {
 
   setSignals(patch: z.infer<typeof signalsSchema>) {
     const allowed = signalsSchema.parse(patch);
-    if (this.runtimeVersion !== '1.2.0' && newVehicleKeys.some((key) => key in allowed))
+    if (
+      (!this.supportsReminders && reminderVehicleKeys.some((key) => key in allowed)) ||
+      (this.runtimeVersion !== '1.3.0' && rainPickupVehicleKeys.some((key) => key in allowed))
+    )
       throw new Error('旧运行时不支持此信号');
     this.commands.push({ time: this.time, type: 'signals', patch: structuredClone(allowed) });
     this.vehicle = vehicleSchema.parse({ ...this.vehicle, ...allowed });
@@ -506,17 +536,18 @@ export class CabinRuntime {
   manual(action: Action) {
     const validated = validateScenario({
       ...this.scenario,
-      actions:
-        action.capability.startsWith('climate.') && action.capability !== 'climate.power'
-          ? [{ capability: 'climate.power', value: true }, action]
-          : [action],
+      actions: needsClimatePower(action.capability)
+        ? [{ capability: 'climate.power', value: true }, action]
+        : [action],
     });
     if (!validated.scenario) throw new Error('手动动作参数不合法');
     if (
       action.capability === 'seat.recline' &&
-      (this.runtimeVersion !== '1.2.0' || !isParked(this.vehicle) || !this.seatAvailable(action))
+      (!this.supportsReminders || !isParked(this.vehicle) || !this.seatAvailable(action))
     )
       throw new Error('必须停车且对应座位有人，才允许座椅动作');
+    if (action.capability === 'climate.frontDefrost' && this.runtimeVersion !== '1.3.0')
+      throw new Error('旧运行时不支持前挡除雾');
     this.commands.push({ time: this.time, type: 'manual', action: structuredClone(action) });
     const resource = resourceOf(action.capability);
     this.locked.add(resource);
