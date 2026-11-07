@@ -136,7 +136,7 @@ with sync_playwright() as p:
     expect(page.locator(".run-status")).to_contain_text("结果待核实")
     expect(page.locator(".feedback-warning")).to_contain_text("最后已知状态")
     unknown = export_run("run-feedback-lost.json")
-    assert unknown["runtimeVersion"] == "1.6.0"
+    assert unknown["runtimeVersion"] == "1.7.0"
     assert len([e for e in unknown["events"] if e["kind"] == "unknown"]) == 1
     assert not [e for e in unknown["events"] if e.get("capability") == "media.volume" and e["kind"] == "accepted"]
     page.get_by_role("button", name="重放执行证据", exact=True).click()
@@ -233,18 +233,22 @@ with sync_playwright() as p:
     select_template("定时午休")
     steps(6)
     expect(page.locator(".run-status")).to_contain_text("等待提醒")
+    expect(page.get_by_text("座椅角度：主驾 25°", exact=False)).to_be_visible()
     expect(page.get_by_text("距离唤醒还有 1200 个虚拟秒", exact=True)).to_be_visible()
     assert page.evaluate("window.reminderTones") == 0
     page.get_by_role("button", name="快进到唤醒", exact=True).click()
     expect(page.get_by_role("alert")).to_have_text("午休时间到，请醒来")
     page.wait_for_function("window.reminderTones === 2")
     nap = export_run("run-nap.json")
-    assert nap["time"] == 1206 and nap["vehicle"]["driverRecline"] == 25
+    assert nap["time"] == 1206 and nap["vehicle"] == nap["initialState"]
+    assert {event.get("capability") for event in nap["events"] if event["kind"] == "restored"} == {
+        "seat.recline", "climate.power", "climate.temperature", "media.play",
+    }
     assert sum(event["kind"] == "reminder" for event in nap["events"]) == 1
     page.get_by_role("button", name="重放执行证据", exact=True).click()
     expect(page.get_by_role("alert")).to_have_text("午休时间到，请醒来")
     assert page.evaluate("window.reminderTones") == 2
-    passed("定时午休准确唤醒，提示音只在预演播放，历史重放静音")
+    passed("定时午休准确唤醒并恢复座椅、空调和媒体，历史重放静音")
 
     select_template("充电等候")
     page.get_by_role("checkbox", name="已插枪充电").uncheck()
@@ -261,16 +265,26 @@ with sync_playwright() as p:
     slider.fill("80")
     expect(page.get_by_role("alert")).to_contain_text("电量已达到 80%")
     charge = export_run("run-charging.json")
-    assert charge["vehicle"]["driverRecline"] == 0 and charge["vehicle"]["climatePower"]
+    assert charge["vehicle"]["driverRecline"] == 0 and not charge["vehicle"]["climatePower"]
     assert charge["status"] == "partial"
     assert not any(e["kind"] == "accepted" and e.get("capability") == "seat.recline" for e in charge["events"])
     select_template("充电等候")
     steps(3)
+    expect(page.get_by_text("座椅角度：主驾 20°", exact=False)).to_be_visible()
     page.get_by_role("checkbox", name="已插枪充电").uncheck()
     expect(page.locator(".run-status")).to_contain_text("条件退出")
+    expect(page.get_by_text("座椅角度：主驾 0°", exact=False)).to_be_visible()
     page.get_by_role("slider", name="模拟传感器数值").fill("100")
     expect(page.get_by_role("alert")).to_have_count(0)
-    passed("充电等候守卫、空座不动、目标电量提醒和拔枪取消")
+    select_template("充电等候")
+    steps(3)
+    page.get_by_role("slider", name="模拟传感器数值").fill("80")
+    expect(page.get_by_role("alert")).to_contain_text("电量已达到 80%")
+    charged = export_run("run-charging-restored.json")
+    assert charged["status"] == "completed" and charged["vehicle"]["batteryPercent"] == 80
+    assert charged["vehicle"]["driverRecline"] == 0 and not charged["vehicle"]["climatePower"]
+    assert sum(e["kind"] == "restored" for e in charged["events"]) == 3
+    passed("充电等候守卫、空座不动、目标电量提醒和拔枪恢复")
 
     select_template("雨天除雾")
     slider = page.get_by_role("slider", name="模拟传感器数值")
@@ -340,13 +354,21 @@ with sync_playwright() as p:
     steps(5)
     page.get_by_role("checkbox", name="窗路无障碍").uncheck()
     expect(page.locator(".run-status")).to_contain_text("部分完成")
+    expect(page.get_by_role("alert")).to_contain_text("取消在途关窗")
     blocked = export_run("run-window-obstructed.json")
     assert blocked["vehicle"]["windowsClosed"] is False
     assert any(e["kind"] == "cancelled" and e.get("capability") == "window.close" for e in blocked["events"])
     select_template("雨天自动关窗")
+    rain_tones = page.evaluate("window.reminderTones")
     steps(6)
     expect(page.get_by_text("车窗回读：四门全闭", exact=True)).to_be_visible()
-    assert export_run("run-window-close.json")["vehicle"]["windowsClosed"] is True
+    expect(page.get_by_role("alert")).to_have_text("雨天关窗：四门车窗已关闭")
+    page.wait_for_function("expected => window.reminderTones === expected", arg=rain_tones + 2)
+    closed = export_run("run-window-close.json")
+    assert closed["vehicle"]["windowsClosed"] is True
+    assert sum(e["kind"] == "reminder" for e in closed["events"]) == 1
+    page.get_by_role("button", name="重放执行证据", exact=True).click()
+    assert page.evaluate("window.reminderTones") == rain_tones + 2
     select_template("雨天自动关窗")
     page.get_by_role("button", name="生成场景", exact=True).click()
     page.get_by_role("button", name="确认参数并保存版本", exact=True).click()
@@ -361,7 +383,7 @@ with sync_playwright() as p:
     slider.fill("3")
     steps(8)
     assert export_run("run-window-close-modified.json")["vehicle"]["windowsClosed"] is True
-    passed("雨量严格阈值、在途障碍取消及四窗全闭回读")
+    passed("雨天关窗成功或遇阻均提示一次，历史重放静音")
 
     select_template("宠物留舱")
     tones_before_pet = page.evaluate("window.reminderTones")
@@ -421,6 +443,7 @@ with sync_playwright() as p:
     page.get_by_role("checkbox", name="窗路无障碍").uncheck()
     steps(9)
     obstructed = export_run("run-rain-link-obstructed.json")
+    expect(page.get_by_role("alert")).to_contain_text("窗路有障碍或状态未知")
     assert obstructed["status"] == "partial" and not obstructed["vehicle"]["windowsClosed"]
     assert obstructed["vehicle"]["frontDefrost"] and obstructed["vehicle"]["mirrorHeat"]
     passed("雨天联动依次回读，关窗遇阻时仍执行独立的除雾和加热")

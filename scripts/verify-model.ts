@@ -132,6 +132,7 @@ batch: for (const model of models) {
           assert.equal(result.draft.confirmed, false);
           assert.equal(result.draft.templateId, baseline.templateId);
           if (intent === 'create') {
+            assert.equal(result.draft.exit, baseline.exit);
             assert.deepEqual(result.draft.trigger, baseline.trigger);
             assert.deepEqual(result.draft.actions, baseline.actions);
             assert.deepEqual(result.draft.reminder, baseline.reminder);
@@ -269,14 +270,23 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
     }
     if (expected.templateId === 'rainClose') {
       assert.equal(complete.vehicle.windowsClosed, true);
+      assert.deepEqual(
+        complete.events.filter((event) => event.kind === 'reminder').map((event) => event.detail),
+        ['雨天关窗：四门车窗已关闭'],
+      );
       const blocked = new CabinRuntime(scene, { ...initial, windowPathClear: false }).advanceTo(
         readyAt,
       );
       assert.equal(blocked.vehicle.windowsClosed, false);
       assert.ok(!blocked.events.some((event) => event.kind === 'accepted'));
+      assert.match(
+        blocked.events.find((event) => event.kind === 'reminder')?.detail ?? '',
+        /窗路有障碍或状态未知/,
+      );
     }
     if (expected.templateId === 'rainMirror') assert.equal(complete.vehicle.mirrorHeat, true);
     if (expected.templateId === 'rainLink') {
+      assert.equal(complete.events.filter((event) => event.kind === 'reminder').length, 1);
       assert.ok(
         complete.vehicle.windowsClosed &&
           complete.vehicle.frontDefrost &&
@@ -288,6 +298,10 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
       assert.equal(blocked.status, 'partial');
       assert.equal(blocked.vehicle.windowsClosed, false);
       assert.ok(blocked.vehicle.frontDefrost && blocked.vehicle.mirrorHeat);
+      assert.match(
+        blocked.events.find((event) => event.kind === 'reminder')?.detail ?? '',
+        /窗路有障碍或状态未知/,
+      );
     }
     assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
     return { status: complete.status, confirmedActions: expected.actions.length };
@@ -344,6 +358,24 @@ function verifyPreview(draft: Scenario, expected: Scenario) {
       : runtime.setSignals({ batteryPercent: reminder.atPercent });
   assert.equal(complete.status, 'completed');
   assert.equal(complete.events.filter((event) => event.kind === 'reminder').length, 1);
+  if (expected.exit === 'cancel-pending-restore-settings') {
+    const { gear, speed, batteryPercent, ...settings } = initial;
+    const {
+      gear: endGear,
+      speed: endSpeed,
+      batteryPercent: endBattery,
+      ...endSettings
+    } = complete.vehicle;
+    assert.equal(endGear, gear);
+    assert.equal(endSpeed, speed);
+    assert.equal(endBattery, reminder.kind === 'charge' ? reminder.atPercent : batteryPercent);
+    assert.deepEqual(endSettings, settings);
+    assert.ok(
+      complete.events.some(
+        (event) => event.kind === 'restored' && event.capability === 'seat.recline',
+      ),
+    );
+  }
   assert.equal(inspectEvidence(JSON.stringify(complete)).replayed.status, 'completed');
   const empty = new CabinRuntime(scene, {
     ...initial,

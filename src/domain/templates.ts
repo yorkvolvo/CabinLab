@@ -100,12 +100,13 @@ export const templates: Record<TemplateId, Scenario> = {
   },
   nap: {
     ...base,
+    exit: 'cancel-pending-restore-settings',
     id: 'nap',
     templateId: 'nap',
     name: '定时午休',
     description: '停车后调整有人就坐的主驾座椅，营造舒适环境，准备完成后开始唤醒计时。',
     sourcePrompt:
-      '定时午休：停车且车内温度高于 28°C 持续 2 秒，依次执行：主驾有人才把主驾座椅后仰到 25°；开启空调；设目标温度为 24°C；播放自然白噪音。准备动作完成后 20 分钟唤醒，离座或驶离取消。',
+      '定时午休：停车且车内温度高于 28°C 持续 2 秒，依次执行：主驾有人才把主驾座椅后仰到 25°；开启空调；设目标温度为 24°C；播放自然白噪音。准备动作完成后 20 分钟唤醒。等待唤醒期间主驾离座则退出，驶离也会退出。退出时在停车且设备允许的情况下恢复原设置。',
     trigger: { signal: 'temperature', operator: 'gt', threshold: 28, holdSeconds: 2 },
     actions: [
       { capability: 'seat.recline', seat: 'driver', value: 25 },
@@ -117,12 +118,13 @@ export const templates: Record<TemplateId, Scenario> = {
   },
   charging: {
     ...base,
+    exit: 'cancel-pending-restore-settings',
     id: 'charging',
     templateId: 'charging',
     name: '充电等候',
     description: '停车充电时进入等候，主驾有人才调整座椅，达到目标电量后提示。',
     sourcePrompt:
-      '充电等候：停车并插枪充电，电量低于 100% 时立即启动（持续 0 秒）。依次执行：主驾有人才把主驾座椅后仰到 20°；开启空调；设目标温度为 24°C。电量达到 80% 提醒一次，拔枪或驶离取消。',
+      '充电等候：停车并插枪充电，电量低于 100% 时立即启动（持续 0 秒）。依次执行：主驾有人才把主驾座椅后仰到 20°；开启空调；设目标温度为 24°C。电量达到 80% 提醒一次，拔枪或驶离取消，退出时在停车且设备允许的情况下恢复原设置。',
     trigger: { signal: 'batteryPercent', operator: 'lt', threshold: 100, holdSeconds: 0 },
     actions: [
       { capability: 'seat.recline', seat: 'driver', value: 20 },
@@ -183,7 +185,7 @@ export const templates: Record<TemplateId, Scenario> = {
     name: '雨天自动关窗',
     description: '停车遇雨时，确认窗路无障碍后关闭四门车窗。',
     sourcePrompt:
-      '创建「雨天自动关窗」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后关闭四门车窗。窗路必须明确无障碍，由执行器检查。驶离或雨量条件失效时停止后续动作，保留已完成状态。',
+      '创建「雨天自动关窗」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后关闭四门车窗，并提示关窗结果。窗路必须明确无障碍，由执行器检查。驶离或雨量条件失效时停止后续动作，保留已完成状态。',
     trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
     actions: [{ capability: 'window.close', value: true }],
   },
@@ -221,7 +223,7 @@ export const templates: Record<TemplateId, Scenario> = {
     name: '雨天联动',
     description: '一次预演依次处理关窗、前挡除雾与外后视镜加热。',
     sourcePrompt:
-      '创建「雨天联动」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后依次执行：关闭四门车窗；开启空调电源；开启前挡除雾；开启外后视镜加热。关窗遇阻时继续独立动作，驶离或雨量条件失效时停止尚未完成的动作，保留已完成状态。',
+      '创建「雨天联动」。仅 P 挡且车速为 0，模拟雨量等级高于 1 级连续 5 秒后依次执行：关闭四门车窗；开启空调电源；开启前挡除雾；开启外后视镜加热。提示关窗结果，关窗遇阻时继续独立动作，驶离或雨量条件失效时停止尚未完成的动作，保留已完成状态。',
     trigger: { signal: 'rainLevel', operator: 'gt', threshold: 1, holdSeconds: 5 },
     actions: [
       { capability: 'window.close', value: true },

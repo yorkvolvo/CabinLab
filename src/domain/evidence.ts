@@ -55,6 +55,8 @@ const evidenceSchema = z
               'stopped',
               'waiting',
               'reminder',
+              'restored',
+              'restore-skipped',
               'completed',
             ]),
             detail: z.string().max(1000),

@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import {
   catalog,
+  hasWindowResultReminder,
   reminderLabel,
   seatLabels,
   signalLabels,
@@ -102,6 +103,8 @@ const eventLabels = {
   stopped: '退出',
   waiting: '等待',
   reminder: '提醒',
+  restored: '已恢复',
+  'restore-skipped': '未恢复',
   completed: '结果',
 };
 
@@ -259,7 +262,7 @@ export default function App() {
   }, [snapshot, latestReminder]);
 
   function enableReminderAudio() {
-    if (!selected.reminder) return;
+    if (!selected.reminder && !hasWindowResultReminder(selected)) return;
     try {
       reminderAudio.current ??= new AudioContext();
       void reminderAudio.current.resume().catch(() => {});
@@ -1108,7 +1111,11 @@ export default function App() {
                               ? '驶离停止后续动作；主驾离座取消唤醒'
                               : '开始行驶或条件失效 → 停止后续动作'}
                         </p>
-                        <span className="small muted">保留已改变的设备状态 · 不自动恢复</span>
+                        <span className="small muted">
+                          {scenario.exit === 'cancel-pending-restore-settings'
+                            ? '停车退出时恢复本场景改过的设置，座椅需确认有人'
+                            : '退出时保留已改变的设备设置'}
+                        </span>
                       </div>
                     </div>
                     {draft && (

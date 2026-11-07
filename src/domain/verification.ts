@@ -300,6 +300,21 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
       expect(count(after, 'reminder') === 1, '提醒重复触发');
       return '一次预演最多发出一次提醒';
     });
+    test('restore-settings', '提醒后恢复已经改变的设置', '退出恢复', () => {
+      const r = create();
+      r.advanceTo(readyTime);
+      const s = atDue(r);
+      expect(
+        s.vehicle.driverRecline === initial.driverRecline &&
+          s.vehicle.climatePower === initial.climatePower &&
+          s.vehicle.targetTemperature === initial.targetTemperature &&
+          s.vehicle.track === initial.track &&
+          s.vehicle.playing === initial.playing &&
+          s.events.some((event) => event.kind === 'restored'),
+        '结束后仍保留场景改过的设置',
+      );
+      return '在停车条件满足时恢复预演开始前的设置';
+    });
     test('empty-seat', '主驾空置时不发送座椅请求', '占用守卫', () => {
       const s = create({ ...initial, driverOccupied: false, passengerOccupied: true }).advanceTo(
         readyTime,
@@ -309,7 +324,13 @@ export function verifyScenario(scenario: Scenario): VerificationReport {
         '空置主驾收到座椅请求',
       );
       expect(
-        s.vehicle.driverRecline === 0 && s.vehicle.climatePower,
+        s.vehicle.driverRecline === 0 &&
+          s.events.some(
+            (event) =>
+              event.kind === 'confirmed' &&
+              event.capability === 'climate.power' &&
+              event.state.climatePower,
+          ),
         '空置座椅改变或独立空调动作未继续',
       );
       return '副驾有人不能替代主驾占用，其他动作可继续';

@@ -111,7 +111,7 @@ test('前挡除雾要求空调成功开启，旧运行时不会接受新能力�
     ),
   );
   assert.throws(() => new CabinRuntime(scenario, initial, 'none', 'old', '1.2.0'), /旧运行时/);
-  const nap = cloneTemplate('nap');
+  const nap = { ...cloneTemplate('nap'), exit: 'cancel-pending-no-restore' as const };
   const old = new CabinRuntime(nap, previewVehicle(nap), 'none', 'old', '1.2.0');
   assert.throws(() => old.setSignals({ rainLevel: 3 }), /旧运行时/);
   const waiting = old.step(6);

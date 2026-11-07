@@ -40,3 +40,21 @@ test('多个场景族可保存超过旧版 90 条的历史，未确认与非法�
     assert.deepEqual(readVersions(), Object.values(templates));
   });
 });
+
+test('午休和充电等候保留旧版并追加恢复版，重新加载不重复追加', () => {
+  const old = ['nap', 'charging'].map((family) => ({
+    ...cloneTemplate(family === 'nap' ? 'nap' : 'charging'),
+    version: 7,
+    exit: 'cancel-pending-no-restore',
+  }));
+  withStoredVersions(old, () => {
+    const versions = readVersions();
+    for (const previous of old) {
+      assert.deepEqual(
+        versions.filter((item) => item.templateId === previous.templateId),
+        [previous, { ...previous, version: 8, exit: 'cancel-pending-restore-settings' }],
+      );
+    }
+    withStoredVersions(versions, () => assert.deepEqual(readVersions(), versions));
+  });
+});

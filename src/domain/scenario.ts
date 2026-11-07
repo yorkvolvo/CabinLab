@@ -92,7 +92,7 @@ export const scenarioSchema = z
     guard: z.literal('parked'),
     actions: z.array(actionSchema).min(1).max(8),
     reminder: reminderSchema.optional(),
-    exit: z.literal('cancel-pending-no-restore'),
+    exit: z.enum(['cancel-pending-no-restore', 'cancel-pending-restore-settings']),
     timeoutSeconds: z
       .number()
       .int()
@@ -111,6 +111,13 @@ export type Capability = Action['capability'];
 export const resourceSchema = z.enum(['climate', 'media', 'ambient', 'seat', 'window', 'mirror']);
 export type Resource = z.infer<typeof resourceSchema>;
 export type TemplateId = Scenario['templateId'];
+
+export function hasWindowResultReminder(scenario: Scenario): boolean {
+  return (
+    (scenario.templateId === 'rainClose' || scenario.templateId === 'rainLink') &&
+    scenario.actions.some((action) => action.capability === 'window.close')
+  );
+}
 
 export const catalog: Record<
   Capability,
@@ -284,6 +291,11 @@ export function validateScenario(value: unknown): { scenario?: Scenario; errors:
   if (seen.has('media.play') && seen.has('media.pause'))
     errors.push('同一场景不能同时播放与暂停媒体');
   const { signal, operator, threshold } = scenario.trigger;
+  if (scenario.exit === 'cancel-pending-restore-settings') {
+    if (scenario.templateId !== 'nap' && scenario.templateId !== 'charging')
+      errors.push('只有定时午休和充电等候支持退出恢复');
+    if (seen.has('window.close')) errors.push('退出恢复场景不支持自动关窗');
+  }
   if (scenario.templateId === 'nap' && scenario.reminder?.kind !== 'wake')
     errors.push('定时午休必须设置唤醒计时');
   if (scenario.templateId === 'charging' && scenario.reminder?.kind !== 'charge')

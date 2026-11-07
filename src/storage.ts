@@ -9,6 +9,22 @@ export function readVersions(): Scenario[] {
       const valid = raw
         .map((s) => validateScenario(s).scenario)
         .filter((s): s is Scenario => Boolean(s?.confirmed));
+      for (const family of ['nap', 'charging']) {
+        const versions = valid.filter((scenario) => scenario.templateId === family);
+        const latest = versions.at(-1);
+        if (
+          !latest ||
+          versions.length >= 30 ||
+          versions.some((scene) => scene.exit === 'cancel-pending-restore-settings')
+        )
+          continue;
+        const upgraded = validateScenario({
+          ...latest,
+          version: Math.max(...versions.map((scene) => scene.version)) + 1,
+          exit: 'cancel-pending-restore-settings',
+        }).scenario;
+        if (upgraded) valid.push(upgraded);
+      }
       return [
         ...valid,
         ...Object.values(templates).filter(

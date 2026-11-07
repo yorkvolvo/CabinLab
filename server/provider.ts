@@ -192,7 +192,7 @@ async function compileWithProvider(
         .map((template) => `${template.templateId}=${template.name}`)
         .join(
           '，',
-        )}。不擅自添加退出恢复操作。无法完整满足需求或需要澄清时，只返回 {"clarification":"说明缺少的信息或未支持的能力"}，不可忽略未支持部分后生成草案。触发阈值必须位于对应信号的 min–max 范围，不能把 Schema 的通用数值边界当成某个信号的范围。信号范围：${JSON.stringify(signalLabels)}。能力目录：${JSON.stringify(catalog)}。场景 Schema：${JSON.stringify(z.toJSONSchema(scenarioSchema))}`;
+        )}。定时午休和充电等候默认使用 exit=cancel-pending-restore-settings，明确要求保留现状时使用 cancel-pending-no-restore。其他场景使用 exit=cancel-pending-no-restore。无法完整满足需求或需要澄清时，只返回 {"clarification":"说明缺少的信息或未支持的能力"}，不可忽略未支持部分后生成草案。触发阈值必须位于对应信号的 min–max 范围，不能把 Schema 的通用数值边界当成某个信号的范围。信号范围：${JSON.stringify(signalLabels)}。能力目录：${JSON.stringify(catalog)}。场景 Schema：${JSON.stringify(z.toJSONSchema(scenarioSchema))}`;
   system +=
     '\n定时午休用 templateId=nap、reminder={"kind":"wake","afterSeconds":秒数}，从准备完成起计时；分钟要换算为秒。充电等候用 templateId=charging、trigger.signal=batteryPercent、reminder={"kind":"charge","atPercent":目标百分比}，只在插枪时进入流程，达到或超过目标即提醒。提醒参数与触发持续时间、动作超时不同。座椅后仰用 {"capability":"seat.recline","seat":"driver 或 passenger","value":角度}，对应座位占用由执行器检查，不生成额外条件或动作。';
   system +=
@@ -206,6 +206,8 @@ async function compileWithProvider(
   if (baseScenario)
     system +=
       '\n每个动作都使用独立的 capability 和 value 键，例如 {"capability":"climate.fan","value":4}。';
+  system +=
+    '\n定时午休在等待唤醒时检测到主驾离座就退出。充电等候拔枪时退出。两者驶离也退出。执行器内置这些条件及按 exit 恢复设置的行为，只恢复本次确认改动的设置，座位无人则跳过座椅。雨天自动关窗和雨天联动的关窗结果提示也由执行器按窗位回读结果发出。上述行为均已支持，无需澄清，无需添加动作、额外触发条件或 reminder。修改时保留已有退出策略。';
   if (repairAttempt)
     system +=
       '\n上次输出未通过 JSON 或参数校验。请按同一用户需求重新输出合法 JSON，不写代码、表达式或 Markdown；保留全部未修改动作，不扩大修改范围。';

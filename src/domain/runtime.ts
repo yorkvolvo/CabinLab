@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   actionLabel,
   catalog,
+  hasWindowResultReminder,
   needsClimatePower,
   reminderLabel,
   seatLabels,
@@ -97,6 +98,7 @@ export const runtimeVersionSchema = z.enum([
   '1.4.0',
   '1.5.0',
   '1.6.0',
+  '1.7.0',
 ]);
 export type Fault = z.infer<typeof faultSchema>;
 export type RunStatus =
@@ -135,6 +137,8 @@ export type EventKind =
   | 'stopped'
   | 'waiting'
   | 'reminder'
+  | 'restored'
+  | 'restore-skipped'
   | 'completed';
 export interface RunEvent {
   index: number;
@@ -189,6 +193,20 @@ export const initialVehicle: Vehicle = {
   track: null,
   volume: 30,
   light: 0,
+};
+
+const restoreFields: Record<Exclude<Capability, 'seat.recline'>, (keyof Vehicle)[]> = {
+  'climate.power': ['climatePower'],
+  'climate.temperature': ['targetTemperature'],
+  'climate.fan': ['fan'],
+  'climate.recirculation': ['recirculation'],
+  'climate.frontDefrost': ['frontDefrost'],
+  'media.play': ['track', 'playing'],
+  'media.pause': ['track', 'playing'],
+  'media.volume': ['volume'],
+  'ambient.light': ['light'],
+  'mirror.heat': ['mirrorHeat'],
+  'window.close': [],
 };
 
 export function previewVehicle(scenario: Scenario): Vehicle {
@@ -276,7 +294,7 @@ export class CabinRuntime {
     vehicle: Vehicle = initialVehicle,
     private readonly fault: Fault = 'none',
     runId = 'local-run',
-    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.6.0',
+    private readonly runtimeVersion: RunEvidence['runtimeVersion'] = '1.7.0',
   ) {
     faultSchema.parse(fault);
     runtimeVersionSchema.parse(runtimeVersion);
@@ -324,11 +342,16 @@ export class CabinRuntime {
         fault.startsWith('mirror.'))
     )
       throw new Error('旧运行时不支持宠物监测或后视镜加热');
-    if (runtimeVersion !== '1.6.0' && this.scenario.templateId === 'rainLink')
+    if (!this.supportsContinuingPetMonitor && this.scenario.templateId === 'rainLink')
       throw new Error('旧运行时不支持雨天联动');
+    if (runtimeVersion !== '1.7.0' && this.restoresSettings)
+      throw new Error('旧运行时不支持退出恢复');
     this.initialState = structuredClone(this.vehicle);
     this.runId = runId;
-    this.log('armed', `场景 v${scenario.version} 已就绪；只运行一次，退出时不恢复设备状态`);
+    this.log(
+      'armed',
+      `场景 v${scenario.version} 已就绪；只运行一次，${this.restoresSettings ? '停车退出时恢复本场景改过的设备设置' : '退出时不恢复设备状态'}`,
+    );
     this.evaluate();
   }
 
@@ -341,6 +364,16 @@ export class CabinRuntime {
       ...(capability ? { capability } : {}),
       state: structuredClone(this.vehicle),
     });
+    if (
+      this.runtimeVersion === '1.7.0' &&
+      capability === 'window.close' &&
+      hasWindowResultReminder(this.scenario) &&
+      ['confirmed', 'rejected', 'blocked', 'cancelled', 'timeout', 'unknown'].includes(kind)
+    )
+      this.log(
+        'reminder',
+        kind === 'confirmed' ? '雨天关窗：四门车窗已关闭' : `雨天关窗：${detail}`,
+      );
   }
 
   private get supportsReminders(): boolean {
@@ -356,7 +389,15 @@ export class CabinRuntime {
   }
 
   private get supportsPetMirror(): boolean {
-    return this.runtimeVersion === '1.5.0' || this.runtimeVersion === '1.6.0';
+    return this.runtimeVersion === '1.5.0' || this.supportsContinuingPetMonitor;
+  }
+
+  private get supportsContinuingPetMonitor(): boolean {
+    return this.runtimeVersion === '1.6.0' || this.runtimeVersion === '1.7.0';
+  }
+
+  private get restoresSettings(): boolean {
+    return this.scenario.exit === 'cancel-pending-restore-settings';
   }
 
   private observeDeparture() {
@@ -399,6 +440,7 @@ export class CabinRuntime {
       );
     this.pending = undefined;
     this.reminderDueAt = undefined;
+    this.restoreSettings();
     this.status = 'stopped';
     this.log('stopped', reason);
   }
@@ -572,6 +614,7 @@ export class CabinRuntime {
   }
 
   private finish() {
+    this.restoreSettings();
     this.status = this.uncertain.size ? 'uncertain' : this.failures ? 'partial' : 'completed';
     this.log(
       'completed',
@@ -581,6 +624,46 @@ export class CabinRuntime {
           ? `部分完成：${this.failures} 项未达成，请检查证据`
           : '全部动作状态已回读；本次场景结束',
     );
+  }
+
+  private restoreSettings() {
+    if (!this.restoresSettings) return;
+    const confirmed = new Set(
+      this.events.filter((event) => event.kind === 'confirmed').map((event) => event.capability),
+    );
+    for (const action of [...this.scenario.actions].reverse()) {
+      if (!confirmed.has(action.capability)) continue;
+      const fields: (keyof Vehicle)[] =
+        action.capability === 'seat.recline'
+          ? [action.seat === 'driver' ? 'driverRecline' : 'passengerRecline']
+          : restoreFields[action.capability];
+      if (!fields.some((key) => this.vehicle[key] !== this.initialState[key])) continue;
+      const resource = resourceOf(action.capability);
+      const label =
+        action.capability === 'seat.recline'
+          ? `${seatLabels[action.seat]}座椅后仰`
+          : catalog[action.capability].label;
+      const reason = !isParked(this.vehicle)
+        ? '停车条件已失效'
+        : this.locked.has(resource)
+          ? '用户已接管'
+          : this.uncertain.has(resource)
+            ? '设备结果未知'
+            : !this.seatAvailable(action)
+              ? '对应座位未确认有人'
+              : fields.some((key) => this.initialState[key] === undefined)
+                ? '初始设置未知'
+                : undefined;
+      if (reason) {
+        this.log('restore-skipped', `跳过恢复 ${label}：${reason}`, action.capability);
+        continue;
+      }
+      Object.assign(
+        this.vehicle,
+        Object.fromEntries(fields.map((key) => [key, this.initialState[key]])),
+      );
+      this.log('restored', `已恢复 ${label} 的原设置`, action.capability);
+    }
   }
 
   private apply(action: Action) {
@@ -722,7 +805,7 @@ export class CabinRuntime {
       this.nextAction();
     }
     if (
-      this.runtimeVersion === '1.6.0' &&
+      this.supportsContinuingPetMonitor &&
       this.status === 'waiting' &&
       this.scenario.reminder?.kind === 'pet'
     )
@@ -737,8 +820,12 @@ export class CabinRuntime {
       this.log('cancelled', '停止预演，取消在途请求', this.pending.action.capability);
     this.pending = undefined;
     this.reminderDueAt = undefined;
+    this.restoreSettings();
     this.status = 'cancelled';
-    this.log('cancelled', '用户停止了本次运行；已完成的设备动作不回滚');
+    this.log(
+      'cancelled',
+      this.restoresSettings ? '用户停止了本次运行' : '用户停止了本次运行；已完成的设备动作不回滚',
+    );
     return this.snapshot();
   }
 
@@ -767,7 +854,7 @@ export class CabinRuntime {
       locked: [...this.locked],
       pending: this.pending?.action.capability,
       ...(this.reminderDueAt === undefined ? {} : { reminderDueAt: this.reminderDueAt }),
-      ...(this.runtimeVersion === '1.6.0' && this.scenario.reminder?.kind === 'pet'
+      ...(this.supportsContinuingPetMonitor && this.scenario.reminder?.kind === 'pet'
         ? { petWarnings: this.status === 'waiting' ? this.petWarnings : [] }
         : {}),
       caveat: '仅表示当前虚拟车辆模型中的状态回读，不构成真车验收或安全认证。',

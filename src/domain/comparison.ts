@@ -32,6 +32,9 @@ export function scenarioChanges(before: Scenario, after: Scenario): ScenarioChan
   );
   add('持续时间', `${before.trigger.holdSeconds} 秒`, `${after.trigger.holdSeconds} 秒`);
   add('动作超时', `${before.timeoutSeconds} 秒`, `${after.timeoutSeconds} 秒`);
+  const exitLabel = (exit: Scenario['exit']) =>
+    exit === 'cancel-pending-restore-settings' ? '停车退出时恢复原设置' : '退出时保留现状';
+  add('退出策略', exitLabel(before.exit), exitLabel(after.exit));
   add('提醒', reminderLabel(before.reminder), reminderLabel(after.reminder));
   for (let index = 0; index < Math.max(before.actions.length, after.actions.length); index++)
     add(

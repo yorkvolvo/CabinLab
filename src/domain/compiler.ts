@@ -1,6 +1,7 @@
 import { cloneTemplate, templates } from './templates';
 import { z } from 'zod';
 import {
+  hasWindowResultReminder,
   reminderLabel,
   scenarioSchema,
   signalLabels,
@@ -55,6 +56,7 @@ export function parseModelModification(
     );
   if (result.draft.name !== base.name || result.draft.description !== base.description)
     throw new Error('参数修改不能改写场景名称或说明');
+  if (result.draft.exit !== base.exit) throw new Error('参数修改不能改写退出策略');
   return result;
 }
 
@@ -87,7 +89,7 @@ export function assumptionsFor(scenario: Scenario): string[] {
     scenario.reminder?.kind === 'pet'
       ? `空调准备后开始监测，${reminderLabel(scenario.reminder)}。空调准备未确认或电量未知也会提醒。`
       : scenario.reminder
-        ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。退出不回滚。`
+        ? `${reminderLabel(scenario.reminder)}。${scenario.reminder.kind === 'charge' ? '驶离或拔枪取消后续动作与提醒' : '驶离停止后续动作，主驾离座取消唤醒'}；进入流程后不因原触发阈值变化而取消。${scenario.exit === 'cancel-pending-restore-settings' ? '停车退出时恢复本场景改过的设置，跳过已接管或状态不明的设备。' : '退出保留已改变的设置。'}`
         : '开始行驶或触发条件失效时只取消在途及后续动作，不恢复已改变的设备状态。',
     ...(scenario.actions.some((action) => action.capability === 'seat.recline')
       ? ['对应座位需明确有人，座椅请求与回读前都会检查占用。']
@@ -95,6 +97,7 @@ export function assumptionsFor(scenario: Scenario): string[] {
     ...(scenario.actions.some((action) => action.capability === 'window.close')
       ? ['请求与回读前均需确认窗路无障碍。']
       : []),
+    ...(hasWindowResultReminder(scenario) ? ['关窗动作有结果时提示一次。'] : []),
     `用户手动操作优先；每个动作 ${scenario.timeoutSeconds} 秒超时，失败后仅继续不依赖该动作的任务。`,
   ];
 }
