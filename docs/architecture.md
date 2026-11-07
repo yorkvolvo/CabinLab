@@ -49,10 +49,10 @@ armed → executing → completed / partial / uncertain
 
 ## 可配置模型的边界
 
-兼容适配器目前使用 Chat Completions 的最小交集，不依赖厂商特有工具调用或 JSON Schema 输出参数。服务必须返回原始 JSON 文本，Markdown 围栏或非法场景会显式失败。需要其他协议时应添加独立适配器并用真实凭证验收，不改变领域执行层。
+适配器支持 Chat Completions 与 Anthropic Messages，不依赖厂商特有工具调用或 JSON Schema 输出参数。两种协议共享编译指令、场景校验、可配置超时（默认 30 秒，最多 120 秒）、100 KB 响应上限和取消逻辑。Messages 使用顶层 system、输出上限和文本块响应；推理块不进入场景或前端结果，截断和工具调用会拒绝。服务必须返回原始 JSON 文本，Markdown 围栏或非法场景会显式失败。请求拒绝自动重定向，保护认证头。
 
 服务默认绑定 `127.0.0.1`，API 检查同源 Origin，禁用缓存，限制请求体和同时编译数。它不是公网多用户服务；当前没有认证、按用户配额、分布式限流或可靠作业队列。
 
-错误码区分 `needs_clarification`、`provider_auth`、`provider_rate_limit`、`provider_timeout`、`provider_unavailable`、`provider_output` 等。响应体最大 100 KB；30 秒截止时间贯穿请求和响应流读取，取消也释放读取器。对上游错误只返回受控消息，不转发响应体或密钥；没有自动重试。合约测试使用受控 fetch / 响应流，尚未证明任何真实厂商服务兼容。
+错误码区分 `needs_clarification`、`provider_auth`、`provider_rate_limit`、`provider_timeout`、`provider_unavailable`、`provider_output` 等。响应体最大 100 KB；同一截止时间贯穿请求和响应流读取，取消也释放读取器。对上游错误只返回受控消息，不转发响应体或密钥；没有自动重试。合约测试使用受控 fetch / 响应流；真实模型联调与模拟结果在验收记录中分别说明，网关配置和原始响应仅存本机。
 
 依赖锁定在 `package-lock.json`。`esbuild` 和 `minimatch` 的 overrides 使用已修复版本，已通过类型检查、lint、构建及浏览器验证；升级上游依赖后可以重新评估是否删除 overrides。

@@ -77,7 +77,7 @@ npm start
 
 只能修改当前场景已有动作；本地句式不支持增删动作、模糊数值或退出恢复。也可直接编辑参数与曲目，非法值会阻止保存。当前场景的完整 DSL 会用于真实模型的修改请求；服务端校验归属，界面展示模型的全部字段变更，用户负责确认是否符合需求。
 
-真实模型适配器使用服务端的 **Chat Completions 兼容协议**：
+真实模型适配器支持服务端的 **Chat Completions 兼容协议** 和 **Anthropic Messages 原生协议**：
 
 ```bash
 cp .env.example .env
@@ -94,13 +94,25 @@ LLM_API_KEY=your-server-side-key
 
 服务端向 `${LLM_BASE_URL}/chat/completions` 发送 `model` 和 `messages`，通过 `Authorization: Bearer …` 鉴权，从 `choices[0].message.content` 读取一个 JSON 场景对象。接口说明参考 [OpenAI Chat Completions API](https://developers.openai.com/api/reference/resources/chat)。这是显式的兼容接口，不代表所有模型服务均受支持。
 
+使用 Anthropic Messages 协议时，将本机 `.env` 改为：
+
+```dotenv
+LLM_PROVIDER=anthropic
+LLM_BASE_URL=https://your-gateway.example
+LLM_MODEL=your-model-id
+LLM_API_KEY=your-server-side-key
+```
+
+该模式向 `${LLM_BASE_URL}/v1/messages` 发送顶层 `system`、用户 `messages` 和 `max_tokens: 16384`，使用 `x-api-key` 与 `anthropic-version: 2023-06-01`。版本固定为兼容协议，参考 [Messages API](https://platform.claude.com/docs/en/api/messages/create) 和 [版本说明](https://platform.claude.com/docs/en/api/versioning)。只合并响应中的文本块；推理块不返回给前端，截断、工具调用和非法场景会明确失败。网关前缀会保留；地址不要包含 `/v1/messages` 本身。
+
 - 密钥仅存在服务端 `.env`；该文件已被 Git 忽略。不要给变量加 `VITE_` 前缀。
 - 配置不完整时启动失败，不静默切回演示模式。服务故障时显示错误，不伪造成功结果。
 - 模型输出必须通过白名单、严格 Schema、能力依赖校验；模型不能修改执行器或直接调用设备。
 - 模型无权确认场景；其 `confirmed` 强制重置为 `false`。所有生成参数都需人工确认。
 - 修改请求携带已确认的基准场景。模型可返回 `{"clarification":"需要明确的信息"}`；此时不生成候选场景。
-- 鉴权失败、服务限流、连接失败、超时、格式错误都有明确反馈；没有自动重试。用户取消生成会取消服务端上游请求，包括已收到响应头但仍在读取的响应流；请求超时为 30 秒，最多两个同时编译请求。
-- **目前只用受控模拟响应测试了适配器，未使用真实模型凭证实测。** Genesis 或其他厂商是否兼容，需要依据其官方协议单独验证；项目未内置任何厂商地址假设。
+- 鉴权失败、服务限流、连接失败、超时、格式错误都有明确反馈；没有自动重试。用户取消生成会取消服务端上游请求，包括已收到响应头但仍在读取的响应流；请求超时默认 30 秒，可用 `LLM_TIMEOUT_MS` 在 1000–120000 毫秒内调整；最多两个同时编译请求。
+- 真实连接结果按 [验收记录](docs/validation.md) 判断。厂商或网关是否兼容必须实测；项目不内置内部服务地址、模型访问凭证或厂商假设。
+- 模型请求禁止自动跟随重定向，避免把认证头带到其他目标。所有响应大小限制、超时、取消和确认门禁适用于两种协议。
 - 启用真实服务后，调用可能产生该服务的费用。原型没有用户认证或多租户隔离，继续保持本机访问；公网交付需要另做认证、请求配额和部署配置。
 
 ## 执行语义
@@ -154,7 +166,7 @@ npm run format:check   # 格式检查
 npm run format         # 统一格式
 ```
 
-自动测试使用 Node.js 自带测试框架，当前 **164 项**，包含三个模板各 22 项验证，以及执行器、修改解析、证据校验、版本对照、mock provider 合约和真实本机 HTTP 边界测试。HTTP 测试需要允许监听 loopback 临时端口。
+自动测试使用 Node.js 自带测试框架，当前 **180 项**，包含三个模板各 22 项验证，以及执行器、修改解析、证据校验、版本对照、两种模型协议的 mock 合约和真实本机 HTTP 边界测试。HTTP 测试需要允许监听 loopback 临时端口。
 
 浏览器验收使用 Python Playwright。先在一个终端运行 `npm run dev` 或 `npm start`，再在另一个终端执行：
 
