@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: cabinlab-scenario-studio
+    runtime: node
+    region: singapore
+    plan: free
+    autoDeployTrigger: off
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: LLM_PROVIDER
+        value: demo
+      - key: NODE_VERSION
+        value: '22.22.0'

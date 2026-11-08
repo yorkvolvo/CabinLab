@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { get as httpGet } from 'node:http';
+import { get as httpGet, request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createApp } from '../server/app';
 import { compile, configFromEnv, type ProviderConfig } from '../server/provider';
@@ -249,6 +249,46 @@ test('API 拒绝伪造的非本地主机名', async (t) => {
     ).on('error', reject);
   });
   assert.equal(status, 403);
+});
+
+test('Render API 按公网 HTTPS 地址校验 Host 和 Origin', async (t) => {
+  const origin = 'https://cabinlab.onrender.com';
+  const app = createApp({ provider: 'demo' }, fetch, origin);
+  const server = app.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const host = new URL(origin).host;
+  const send = (path: string, headers: Record<string, string>, body?: string) =>
+    new Promise<number | undefined>((resolve, reject) => {
+      const req = httpRequest(
+        base + path,
+        {
+          method: body ? 'POST' : 'GET',
+          headers: body
+            ? {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(body),
+                ...headers,
+              }
+            : headers,
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode);
+        },
+      );
+      req.on('error', reject);
+      req.end(body);
+    });
+  const body = JSON.stringify(request);
+  assert.equal(await send('/api/health', { Host: host }), 200);
+  assert.equal(await send('/api/compile', { Host: host, Origin: origin }, body), 200);
+  assert.equal(await send('/api/compile', { Host: host }, body), 403);
+  assert.equal(await send('/api/compile', { Host: host, Origin: 'http://' + host }, body), 403);
+  assert.equal(await send('/api/health', { Host: 'other.example', 'X-Forwarded-Host': host }), 403);
+  assert.throws(() => createApp(modelConfig, fetch, origin), /仅支持 LLM_PROVIDER=demo/);
+  assert.throws(() => createApp({ provider: 'demo' }, fetch, 'http://' + host), /HTTPS/);
 });
 
 test('同时两个编译请求占用时第三个被拒绝，完成后可重试', { timeout: 5000 }, async (t) => {

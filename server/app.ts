@@ -4,19 +4,36 @@ import { compile, compileRequestSchema, type ProviderConfig } from './provider';
 import { CompileError } from '../src/domain/compiler';
 import { scenePackagesRouter } from './scene-packages';
 
-export function createApp(config: ProviderConfig, fetcher: typeof fetch = fetch) {
+export function createApp(
+  config: ProviderConfig,
+  fetcher: typeof fetch = fetch,
+  renderUrl?: string,
+) {
+  const publicUrl = renderUrl ? new URL(renderUrl) : undefined;
+  if (publicUrl && (publicUrl.protocol !== 'https:' || publicUrl.href !== `${publicUrl.origin}/`)) {
+    throw new Error('RENDER_EXTERNAL_URL 必须是 HTTPS 站点地址');
+  }
+  if (publicUrl && config.provider !== 'demo') {
+    throw new Error('Render 演示仅支持 LLM_PROVIDER=demo');
+  }
+
   const app = express();
   app.disable('x-powered-by');
   app.use('/api', (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    if (!['localhost', '127.0.0.1', '[::1]'].includes(req.hostname)) {
-      res.status(403).json({ error: '本地原型仅接受 localhost 或 loopback 地址' });
+    const allowedHost = publicUrl
+      ? req.headers.host?.toLowerCase() === publicUrl.host
+      : ['localhost', '127.0.0.1', '[::1]'].includes(req.hostname);
+    if (!allowedHost) {
+      res.status(403).json({ error: '请求域名不在允许范围内' });
       return;
     }
     if (req.method === 'POST') {
       const origin = req.headers.origin;
-      if (origin && origin !== `${req.protocol}://${req.headers.host}`) {
+      // Render terminates TLS. Use its configured public origin instead of forwarded headers.
+      const expectedOrigin = publicUrl?.origin ?? `${req.protocol}://${req.headers.host}`;
+      if ((publicUrl || origin) && origin !== expectedOrigin) {
         res.status(403).json({ error: '仅允许同源请求' });
         return;
       }

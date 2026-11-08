@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp } from './app';
 import { configFromEnv } from './provider';
 
-const app = createApp(configFromEnv(process.env));
+const app = createApp(configFromEnv(process.env), fetch, process.env.RENDER_EXTERNAL_URL);
 const port = Number(process.env.PORT || 5173);
 const host = process.env.HOST || '127.0.0.1';
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 不合法');

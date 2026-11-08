@@ -819,6 +819,11 @@ with sync_playwright() as p:
     expect(journey.get_by_text("车端启动并回读", exact=True)).to_be_visible()
     journey.get_by_role("button", name="演示定时午休", exact=True).click()
     expect(studio.get_by_role("combobox", name="选择场景模板")).to_have_value("nap")
+    with studio.expect_response("**/api/compile") as compiled:
+        studio.get_by_role("button", name="生成场景", exact=True).click()
+    assert compiled.value.ok
+    compiled_body = compiled.value.json()
+    assert compiled_body["mode"] == "demo" and compiled_body["draft"]["templateId"] == "nap"
     studio.get_by_role("spinbutton", name="唤醒时间").fill("600")
     studio.get_by_role("button", name="确认参数并保存版本", exact=True).click()
     expect(studio.get_by_label("场景版本", exact=True)).to_have_value("2")
