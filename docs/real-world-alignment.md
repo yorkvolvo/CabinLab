@@ -175,3 +175,80 @@ ISO 21434（网络安全）：发布与下发链路需要包签名、完整性�
 ### 4.6 边界声明延续
 
 「仿真通过不是量产安全认证，也不是完整需求覆盖证明」（README）继续成立。本节指出差距位置，不构成安全评估，也不暗示原型具备任何 ASIL 能力。
+
+## 5. 目标架构（概念层）
+
+本节给出重构后的概念设计，不落代码实现。目标是让领域模型承载真实语义，同时保留第 2 节的工程纪律。
+
+### 5.1 分层
+
+```mermaid
+flowchart TD
+    A[自然语言需求] --> B[编译: LLM + Schema 校验 + 人工确认]
+    B --> C[场景规则模型: 通用条件 / 动作 / 策略, 数据驱动]
+    C --> D[调度与仲裁: 多场景共存, 优先级, 接管交还]
+    D --> E[能力适配层: 信号抽象 + 服务接口]
+    E --> F[仿真器 / 真实车端桥接]
+    C --> G[证据与验证: 固定基线, 独立重放]
+    D --> G
+```
+
+各层职责：
+
+- 编译层：不变（见 2.1）。模型组合通用 DSL，校验与确认门禁保留。
+- 场景规则模型：重构核心。条件 / 动作 / 策略是数据，模板是预置实例。
+- 调度与仲裁：新增。多场景生命周期、按资源优先级仲裁、接管交还、未知资源跨场景隔离。
+- 能力适配层：信号抽象（VSS 风格命名加质量加时间戳）与服务接口（请求 / 回读关联）。仿真器是该层的一个实现，真实车端桥接是另一个。
+- 证据与验证：延续版本化重放与固定基线。
+
+### 5.2 通用触发 / 条件模型（概念 Schema）
+
+示例为示意，非最终 Schema：
+
+```json
+{
+  "schemaVersion": 2,
+  "trigger": {
+    "op": "and",
+    "conditions": [
+      { "kind": "schedule", "cron": "0 8 * * 1-5", "timezone": "Asia/Shanghai" },
+      { "kind": "event", "event": "driver.identify", "profile": "owner" },
+      { "kind": "signal", "signal": "cabin.temperature", "op": "lt", "value": 5, "holdSeconds": 0 }
+    ]
+  },
+  "actions": [
+    { "capability": "climate.power", "value": true },
+    { "capability": "climate.temperature", "value": 24, "zone": "driver" },
+    { "capability": "seat.heat", "value": 2, "seat": "driver" }
+  ],
+  "priority": "user",
+  "guard": { "preconditions": ["parked"], "riskClass": "comfort" },
+  "exit": { "policy": "restore-confirmed", "handbackSeconds": 300 }
+}
+```
+
+要点：
+
+- 条件是可组合树（and / or / not），三类：signal（连续量加持续）、event（车门 / 插枪 / 挡位 / 识别等边缘触发）、schedule（墙上时钟加重复）。
+- 信号用 VSS 风格分层命名（cabin.temperature、vehicle.gear），质量与时间戳由适配层提供；规则层只消费类型化值。
+- 动作带 zone / seat 参数，能力由车型能力档案声明。
+- priority 决定仲裁顺序；guard 携带前置条件与风险等级；exit 携带恢复策略与交还时间。
+
+### 5.3 二十个模板映射为预置实例
+
+模板不再是类型锁，而是通用模型上的预置数据。举例：
+
+- 定时午休 = event（主驾在座）加准备动作加 wake 提醒（afterSeconds）加 exit restore-confirmed；原 nap 校验规则成为「该预置实例的产品约束」，而非全局代码分支。
+- 雨天关窗 = signal（rainLevel gt 1，hold 5s）加 parked 加 window.close；关窗结果提醒成为 DSL 中的声明式提醒，而非 `hasWindowResultReminder` 注入。
+- 预约暖舱 = schedule（cron 或相对）加准备动作；相对定时器保留为 schedule 的一种，兼容现有演示。
+- 到家提醒 = event（geofence.enter home）加 message 提醒，无动作，riskClass reminder。
+
+迁移纪律：每个预置实例保留原产品预期，22 项（及 nap 10 项等）基线不变；版本对照逻辑不变；旧证据经 runtimeVersion 分支重放。
+
+### 5.4 仲裁与信号层概念
+
+仲裁：按资源的优先级队列（安全 > 手动 > OEM 默认 > 用户场景）；手动接管锁定资源并启动交还计时，超时或下次触发释放；未知资源跨场景隔离。
+
+信号层：每个信号携带 value 加 quality（valid / invalid / stale）加 timestamp；规则层把 invalid / stale 视为「条件未知」，保守处理（不触发、不恢复）；请求与回读按 requestId 关联，时延由适配层提供（仿真器可注入抖动）。
+
+这两层是 P1 的前提，概念阶段只定义接口，不实现。
