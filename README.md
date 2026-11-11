@@ -197,6 +197,8 @@ flowchart LR
 
 本机实际测试结果及边界见 [docs/validation.md](docs/validation.md)。
 
+对照真实车载场景工程的差距分析与重构路线见 [docs/real-world-alignment.md](docs/real-world-alignment.md)。
+
 ## 证据导入与复核
 
 从时间线导出运行证据，或使用「导出实验」保存场景、运行及验证报告。到「证据复核」选择 JSON 文件，系统在独立模拟器中重放并比对事件、设备终态、运行状态、输入命令、进度与接管锁。原始结果可能是部分完成或已停止，**复现成功不等于动作全部成功**。文件内的验证报告不会成为新的测试答案。
