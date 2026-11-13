@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readVersions } from '../src/storage';
+import { readVersions, saveVersion } from '../src/storage';
 import { cloneTemplate, templates } from '../src/domain/templates';
 
 function withStoredVersions(value: unknown, run: () => void) {
@@ -63,4 +63,30 @@ test('只有原始午休模板追加恢复版，用户选择保留现状时仍�
       [old, custom],
     ),
   );
+});
+
+test('存储写入失败时拒绝保存并提示导出，不抛原始异常', async () => {
+  const previousStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: () => '[]',
+      setItem: () => {
+        throw new Error('QuotaExceededError: storage full');
+      },
+    },
+  });
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: { locks: { request: (_key: string, run: () => unknown) => run() } },
+  });
+  try {
+    await assert.rejects(saveVersion(cloneTemplate('rest'), 1), /浏览器存储写入失败，版本未保存/);
+  } finally {
+    if (previousStorage) Object.defineProperty(globalThis, 'localStorage', previousStorage);
+    else Reflect.deleteProperty(globalThis, 'localStorage');
+    if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
 });

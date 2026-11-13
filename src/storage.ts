@@ -65,7 +65,11 @@ export async function saveVersion(draft: Scenario, expectedVersion: number) {
       ...versions.filter((scene) => scene.templateId === draft.templateId).slice(-29),
       saved,
     ];
-    localStorage.setItem(storageKey, JSON.stringify(merged));
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(merged));
+    } catch (cause) {
+      throw new Error('浏览器存储写入失败，版本未保存；请导出场景后重试。', { cause });
+    }
     return saved;
   });
 }
