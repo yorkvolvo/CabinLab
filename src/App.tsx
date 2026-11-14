@@ -107,6 +107,28 @@ const icons = {
   leaveReminder: AlarmClock,
   homeReminder: MapPin,
 };
+const templateTags: Record<TemplateId, string> = {
+  rest: '降温 / 音乐',
+  reading: '灯光 / 媒体',
+  refresh: '空调 / 通风',
+  warmup: '暖风 / 预热',
+  cooldown: '降温 / 送风',
+  night: '柔光 / 白噪音',
+  nap: '座椅 / 定时唤醒',
+  charging: '充电 / 到点提醒',
+  rainDefog: '除雾 / 送风',
+  pickup: '空调 / 暂停媒体',
+  passengerWait: '空调 / 乘客等候',
+  rainClose: '雨量 / 关窗',
+  petWait: '空调 / 舱温监测',
+  rainMirror: '雨量 / 后视镜加热',
+  rainLink: '雨量 / 联动',
+  preheat: '预约 / 暖舱',
+  precool: '预约 / 预冷',
+  preVent: '预约 / 换气',
+  leaveReminder: '离车 / 文字提醒',
+  homeReminder: '到家 / 文字提醒',
+};
 const eventLabels = {
   armed: '就绪',
   condition: '计时',
@@ -632,22 +654,9 @@ export default function App() {
                 <Icon size={16} />
                 <span>
                   {item.name}
-                  <small>
-                    {
-                      [
-                        '降温 / 音乐',
-                        '灯光 / 媒体',
-                        '空调 / 通风',
-                        '暖风 / 预热',
-                        '降温 / 送风',
-                        '柔光 / 白噪音',
-                        '座椅 / 定时唤醒',
-                        '充电 / 到点提醒',
-                      ][index]
-                    }
-                  </small>
+                  <small>{templateTags[item.templateId]}</small>
                 </span>
-                <span className="mono scenario-index">0{index + 1}</span>
+                <span className="mono scenario-index">{String(index + 1).padStart(2, '0')}</span>
               </button>
             );
           })}
@@ -792,7 +801,7 @@ export default function App() {
               {Object.entries(catalog).map(([id, item], index) => (
                 <section className="panel capability-card" key={id}>
                   <div className="capability-number mono">
-                    0{index + 1}
+                    {String(index + 1).padStart(2, '0')}
                     <ShieldCheck size={17} />
                   </div>
                   <h2>{item.label}</h2>
