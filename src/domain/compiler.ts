@@ -10,7 +10,7 @@ import {
   type Scenario,
 } from './scenario';
 
-export const modelPatchSchema = scenarioSchema
+const modelPatchSchema = scenarioSchema
   .omit({
     schemaVersion: true,
     id: true,

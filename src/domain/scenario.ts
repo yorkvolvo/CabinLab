@@ -31,7 +31,7 @@ export const actionSchema = z.discriminatedUnion('capability', [
     })
     .strict(),
 ]);
-export const reminderSchema = z.discriminatedUnion('kind', [
+const reminderSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('wake'), afterSeconds: z.number().int().min(1).max(1800) }).strict(),
   z.object({ kind: z.literal('charge'), atPercent: z.number().int().min(1).max(100) }).strict(),
   z.object({ kind: z.literal('message'), text: z.string().trim().min(1).max(80) }).strict(),

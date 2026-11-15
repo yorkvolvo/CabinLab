@@ -7,7 +7,7 @@ import {
 } from './scenario';
 import { verifyScenario } from './verification';
 
-export interface ScenarioChange {
+interface ScenarioChange {
   field: string;
   before: string;
   after: string;

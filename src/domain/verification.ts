@@ -2,7 +2,7 @@ import { CabinRuntime, previewVehicle, replayEvidence, type RunSnapshot } from '
 import { cloneTemplate } from './templates';
 import { resourceOf, signalLabels, validateScenario, type Action, type Scenario } from './scenario';
 
-export interface VerificationCase {
+interface VerificationCase {
   id: string;
   name: string;
   group: string;

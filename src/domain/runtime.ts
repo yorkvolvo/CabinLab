@@ -109,7 +109,7 @@ export const runTimeLimit = 3600;
 export const runCommandLimit = 1000;
 export const runEventLimit = 4096;
 export type Fault = z.infer<typeof faultSchema>;
-export type RunStatus =
+type RunStatus =
   | 'armed'
   | 'executing'
   | 'waiting'
@@ -128,7 +128,7 @@ export const runStatusLabels: Record<RunStatus, string> = {
   stopped: '条件退出',
   cancelled: '已停止',
 };
-export type EventKind =
+type EventKind =
   | 'armed'
   | 'condition'
   | 'reset'
@@ -148,7 +148,7 @@ export type EventKind =
   | 'restored'
   | 'restore-skipped'
   | 'completed';
-export interface RunEvent {
+interface RunEvent {
   index: number;
   time: number;
   kind: EventKind;
@@ -156,7 +156,7 @@ export interface RunEvent {
   capability?: Capability;
   state: Vehicle;
 }
-export type RunCommand =
+type RunCommand =
   | {
       time: number;
       type: 'signals';
@@ -164,7 +164,7 @@ export type RunCommand =
     }
   | { time: number; type: 'manual'; action: Action }
   | { time: number; type: 'cancel' };
-export interface RunEvidence {
+interface RunEvidence {
   schemaVersion: 1;
   runtimeVersion: z.infer<typeof runtimeVersionSchema>;
   runId: string;
@@ -289,7 +289,7 @@ export function previewVehicle(scenario: Scenario): Vehicle {
   return vehicle;
 }
 
-export const isParked = (v: Vehicle) => v.gear === 'P' && v.speed === 0;
+const isParked = (v: Vehicle) => v.gear === 'P' && v.speed === 0;
 export const isTerminal = (status: RunStatus) =>
   !['armed', 'executing', 'waiting'].includes(status);
 
