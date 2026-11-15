@@ -179,15 +179,19 @@
 运行 `python scripts/e2e.py` 会重新生成以下文件；它们保留在本机 `artifacts/`，没有提交到 Git：
 
 - `browser-verification.json`：45 项浏览器检查清单。
-- `run-success.json`、`run-replay.json`：正常执行与重放对照。
-- `run-timeout.json`、`run-manual.json`、`run-motion.json`：超时、接管、挡位变化证据。
-- `run-cancelled.json`、`run-cancelled-replay.json`：停止与重放对照。
-- `verification-regression.json`：零秒变更的逐用例报告。
+- 运行证据 `run-*.json`：每条场景或异常路径一份，含初始状态、输入命令、逐事件状态快照与终态。
+  - 通用执行与异常：`run-success`、`run-replay`、`run-timeout`、`run-rejected`、`run-feedback-lost` 及其重放、`run-manual`、`run-motion`、`run-cancelled` 及其重放、`run-after-discard`。
+  - 各模板预演：阅读、清新、暖舱、降温、夜间、午休、充电及其恢复、宠物监测、后视镜加热、雨天除雾、雨天联动及其遇阻、关窗及其修改与遇阻、乘客等候、接娃及其驶离停止、离车与到家提醒、预约取消等；文件名对应场景，部分为中文名。
+- `verification-regression.json`、`verification-regression.png`：零秒变更的逐用例报告及截图。
 - `version-comparison.json`、`version-comparison.png`：两版对照报告及截图。
-- `experiment.json`、`import-replayed.json`：完整实验导入与独立复现证据。
+- `experiment.json`、`import-replayed.json`：完整实验导出与跨会话独立复现证据。
 - `run-tampered.json`、`run-legacy.json`：只用于拒绝路径验收的负向样本，不是有效证据。
+- `nap-scene-package.json`：发布的定时午休场景包。
+- `nap-vehicle-touch.json`、`nap-vehicle-voice.json`：车端点选与模拟语音的运行证据。
+- `workbench-initial.png`、`workbench-completed.png`、`workbench-mobile.png`：工作台桌面、完成与移动布局截图。
+- `feedback-lost.png`：回读丢失界面截图。
 - `evidence-inspector.png`、`evidence-mobile.png`：桌面及移动端证据复核截图。
-- `workbench-initial.png`、`workbench-completed.png`、`workbench-mobile.png`：浏览器截图。
+- `nap-end-to-end-vehicle.png`：车端端到端演示截图。
 
 ## 2026-11-02 历史交付的验证边界
 
