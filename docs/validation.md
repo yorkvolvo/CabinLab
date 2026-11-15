@@ -178,7 +178,7 @@
 
 运行 `python scripts/e2e.py` 会重新生成以下文件；它们保留在本机 `artifacts/`，没有提交到 Git：
 
-- `browser-verification.json`：23 项浏览器检查清单。
+- `browser-verification.json`：45 项浏览器检查清单。
 - `run-success.json`、`run-replay.json`：正常执行与重放对照。
 - `run-timeout.json`、`run-manual.json`、`run-motion.json`：超时、接管、挡位变化证据。
 - `run-cancelled.json`、`run-cancelled-replay.json`：停止与重放对照。
